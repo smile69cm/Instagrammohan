@@ -1,7 +1,11 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, mkdir, copyFile } from "fs/promises";
+import { rm, readFile, mkdir } from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, "..");
 
 const allowlist = [
   "@google/generative-ai",
@@ -32,16 +36,24 @@ const allowlist = [
 ];
 
 async function buildForVercel() {
-  await rm("dist", { recursive: true, force: true });
-  await mkdir("dist", { recursive: true });
-  await mkdir("dist/api", { recursive: true });
+  await rm(path.join(rootDir, "dist"), { recursive: true, force: true });
+  await mkdir(path.join(rootDir, "dist"), { recursive: true });
+  await mkdir(path.join(rootDir, "dist/api"), { recursive: true });
 
   console.log("Building client...");
   await viteBuild({
+    root: path.join(rootDir, "client"),
     build: {
-      outDir: "dist",
+      outDir: path.join(rootDir, "dist"),
       emptyOutDir: false,
-    }
+    },
+    resolve: {
+      alias: {
+        "@": path.join(rootDir, "client", "src"),
+        "@shared": path.join(rootDir, "shared"),
+        "@assets": path.join(rootDir, "attached_assets"),
+      },
+    },
   });
 
   console.log("Building API for Vercel serverless...");
