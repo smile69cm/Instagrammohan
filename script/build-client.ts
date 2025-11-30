@@ -2,6 +2,8 @@ import { build as viteBuild } from "vite";
 import { rm, mkdir } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -13,6 +15,10 @@ async function buildClient() {
   console.log("Building client for Vercel...");
   await viteBuild({
     root: path.join(rootDir, "client"),
+    plugins: [
+      react(),
+      tailwindcss(),
+    ],
     build: {
       outDir: path.join(rootDir, "dist"),
       emptyOutDir: false,
