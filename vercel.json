@@ -1,12 +1,12 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
+  "buildCommand": "tsx script/build-vercel.ts",
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/api/index.js"
     },
     {
       "source": "/((?!api/).*)",
@@ -14,7 +14,7 @@
     }
   ],
   "functions": {
-    "api/index.ts": {
+    "dist/api/index.js": {
       "maxDuration": 30,
       "memory": 1024
     }
