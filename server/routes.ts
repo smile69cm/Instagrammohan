@@ -1298,7 +1298,29 @@ export async function registerRoutes(
             continue;
           }
           
-          console.log(`Processing scheduled message to ${msg.recipientInstagramId}`);
+          // Handle pending username resolution
+          let recipientId = msg.recipientInstagramId;
+          if (recipientId.startsWith('pending:')) {
+            const pendingUsername = recipientId.replace('pending:', '');
+            console.log(`Attempting to resolve pending username: @${pendingUsername}`);
+            
+            // Try to resolve from follower tracking
+            const follower = await storage.getFollowerByUsername(account.id, pendingUsername);
+            if (follower && follower.followerInstagramId) {
+              recipientId = follower.followerInstagramId;
+              console.log(`Resolved @${pendingUsername} to ID: ${recipientId}`);
+              // Update the message with resolved ID for future reference
+              await storage.updateScheduledMessage(msg.id, { recipientInstagramId: recipientId });
+            } else {
+              await storage.markScheduledMessageFailed(
+                msg.id, 
+                `Cannot send DM: User @${pendingUsername} has not interacted with your account. They need to message you or comment on your posts first.`
+              );
+              continue;
+            }
+          }
+          
+          console.log(`Processing scheduled message to ${recipientId}`);
           
           // Use button-enabled function if any links are marked as buttons
           const links = msg.links as any[] || [];
@@ -1307,7 +1329,7 @@ export async function registerRoutes(
           if (hasButtonLinks) {
             await sendDirectMessageWithButtons(
               account.accessToken,
-              msg.recipientInstagramId,
+              recipientId,
               msg.message,
               links
             );
@@ -1323,7 +1345,7 @@ export async function registerRoutes(
                 }
               }
             }
-            await sendDirectMessage(account.accessToken, msg.recipientInstagramId, fullMessage.trim());
+            await sendDirectMessage(account.accessToken, recipientId, fullMessage.trim());
           }
           
           await storage.markScheduledMessageProcessed(msg.id);
@@ -1332,11 +1354,11 @@ export async function registerRoutes(
           await storage.createActivityLog({
             userId: msg.userId,
             action: "scheduled_dm_sent",
-            targetUsername: msg.recipientUsername || msg.recipientInstagramId,
+            targetUsername: msg.recipientUsername || recipientId,
             details: msg.note || `Scheduled message sent: "${msg.message.substring(0, 50)}..."`,
           });
           
-          console.log(`Scheduled message sent successfully to ${msg.recipientInstagramId}`);
+          console.log(`Scheduled message sent successfully to ${recipientId}`);
         } catch (err: any) {
           console.error(`Failed to send scheduled message ${msg.id}:`, err?.message);
           await storage.markScheduledMessageFailed(msg.id, err?.message || "Unknown error");
