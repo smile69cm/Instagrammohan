@@ -43,9 +43,13 @@ export const automations = pgTable("automations", {
     mediaId?: string;
     mediaPermalink?: string;
     messageTemplate?: string;
-    links?: { label?: string; url: string }[];
+    links?: { label?: string; url: string; isButton?: boolean }[];
     commentReplyEnabled?: boolean;
     commentReplyTemplate?: string;
+    followersOnly?: boolean;
+    fallbackCommentMessage?: string;
+    storyReactionReplyEnabled?: boolean;
+    storyReactionMessage?: string;
   }>(),
   stats: jsonb("stats").$type<{
     totalReplies?: number;
@@ -100,6 +104,10 @@ export const automationQueue = pgTable("automation_queue", {
     commenterUserId?: string;
     mediaId?: string;
     messageType?: string;
+    storyId?: string;
+    storyReaction?: string;
+    senderId?: string;
+    senderUsername?: string;
   }>().notNull(),
   status: text("status").notNull().default("pending"),
   attempts: integer("attempts").default(0),
