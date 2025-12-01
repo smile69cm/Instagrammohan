@@ -3,8 +3,8 @@ services:
     name: instagram-dm-automation
     runtime: node
     nodeVersion: "20"
-    buildCommand: npm install && NODE_ENV=production npm run build
-    startCommand: npm run start
+    buildCommand: yarn install && NODE_ENV=production yarn build
+    startCommand: yarn start
     envVars:
       - key: NODE_ENV
         value: production
