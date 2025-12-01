@@ -68,7 +68,7 @@ const automationTypes = {
     color: "text-primary",
     bg: "bg-primary/10",
     label: "Auto DM Reply",
-    description: "Automatically reply to DMs with AI-generated responses",
+    description: "Automatically reply to DMs when they contain trigger keywords",
   },
   story_reaction: {
     icon: Heart,
@@ -82,7 +82,7 @@ const automationTypes = {
     color: "text-secondary",
     bg: "bg-secondary/10",
     label: "Welcome Message",
-    description: "Send welcome messages to new followers",
+    description: "Send a welcome message when someone sends you a DM",
   },
 };
 
@@ -240,6 +240,15 @@ export default function Automations() {
       toast({
         title: "Missing fields",
         description: "Please enter at least one keyword and a message template",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if ((formData.type === "auto_dm_reply" || formData.type === "welcome_message") && !formData.messageTemplate) {
+      toast({
+        title: "Missing fields",
+        description: "Please enter a reply message",
         variant: "destructive",
       });
       return;
@@ -768,18 +777,7 @@ export default function Automations() {
             {formData.type !== "comment_to_dm" && (
               <>
                 <div className="grid gap-2">
-                  <Label htmlFor="prompt">AI Prompt (for replies)</Label>
-                  <Textarea
-                    id="prompt"
-                    placeholder="e.g., Be friendly and helpful. Answer questions about our products."
-                    value={formData.prompt}
-                    onChange={(e) => setFormData(prev => ({ ...prev, prompt: e.target.value }))}
-                    data-testid="input-automation-prompt"
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="triggerWords">Trigger Words</Label>
+                  <Label htmlFor="triggerWords">Trigger Keywords</Label>
                   <div className="flex flex-wrap gap-2 mb-2">
                     {formData.keywords.map((keyword, index) => (
                       <Badge 
@@ -802,13 +800,88 @@ export default function Automations() {
                   </div>
                   <Input
                     id="triggerWords"
-                    placeholder="Type a word and press Enter"
+                    placeholder="Type a keyword and press Enter"
                     value={keywordInput}
                     onChange={(e) => setKeywordInput(e.target.value)}
                     onKeyDown={handleKeywordKeyDown}
                     data-testid="input-trigger-words"
                   />
-                  <p className="text-xs text-muted-foreground">Leave empty to respond to all messages</p>
+                  <p className="text-xs text-muted-foreground">When someone DMs these keywords, they'll receive your reply. Leave empty to respond to all messages.</p>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="dmMessageTemplate">Reply Message *</Label>
+                  <Textarea
+                    id="dmMessageTemplate"
+                    placeholder="e.g., Thanks for reaching out! Here's the information you requested."
+                    value={formData.messageTemplate}
+                    onChange={(e) => setFormData(prev => ({ ...prev, messageTemplate: e.target.value }))}
+                    data-testid="input-dm-message-template"
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    This message will be sent as a DM reply
+                  </p>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label>Links (Optional)</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Add links to include in your DM reply
+                  </p>
+                  {formData.links.length > 0 && (
+                    <div className="space-y-2 mb-2">
+                      {formData.links.map((link, index) => (
+                        <div 
+                          key={index} 
+                          className="flex items-center gap-2 p-2 bg-muted rounded-lg"
+                          data-testid={`dm-link-item-${index}`}
+                        >
+                          <LinkIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            {link.label && (
+                              <p className="text-sm font-medium truncate">{link.label}</p>
+                            )}
+                            <p className="text-xs text-muted-foreground truncate">{link.url}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeLink(index)}
+                            className="text-muted-foreground hover:text-red-500 transition-colors"
+                            data-testid={`remove-dm-link-${index}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Label (optional)"
+                      value={linkInput.label}
+                      onChange={(e) => setLinkInput(prev => ({ ...prev, label: e.target.value }))}
+                      className="flex-1"
+                      data-testid="input-dm-link-label"
+                    />
+                    <Input
+                      placeholder="https://..."
+                      value={linkInput.url}
+                      onChange={(e) => setLinkInput(prev => ({ ...prev, url: e.target.value }))}
+                      className="flex-1"
+                      data-testid="input-dm-link-url"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addLink}
+                      disabled={!linkInput.url.trim()}
+                      data-testid="button-add-dm-link"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </>
             )}
