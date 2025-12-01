@@ -12,9 +12,7 @@ import {
   Trash2,
   X,
   Link as LinkIcon,
-  Clock,
-  Users,
-  Sparkles
+  Clock
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -120,8 +118,6 @@ export default function Automations() {
     links: [] as { label?: string; url: string; isButton?: boolean }[],
     commentReplyEnabled: false,
     commentReplyTemplate: "",
-    followersOnly: false,
-    fallbackCommentMessage: "",
     delaySeconds: 0,
     welcomeCooldownDays: 7,
     scheduleEnabled: false,
@@ -234,8 +230,6 @@ export default function Automations() {
       links: [],
       commentReplyEnabled: false,
       commentReplyTemplate: "",
-      followersOnly: false,
-      fallbackCommentMessage: "",
       delaySeconds: 0,
       welcomeCooldownDays: 7,
       scheduleEnabled: false,
@@ -294,8 +288,6 @@ export default function Automations() {
         links: formData.links,
         commentReplyEnabled: formData.commentReplyEnabled,
         commentReplyTemplate: formData.commentReplyTemplate,
-        followersOnly: formData.followersOnly,
-        fallbackCommentMessage: formData.fallbackCommentMessage,
         delaySeconds: formData.delaySeconds,
         welcomeCooldownDays: formData.welcomeCooldownDays,
         scheduleEnabled: formData.scheduleEnabled,
@@ -334,8 +326,6 @@ export default function Automations() {
       links: config.links || [],
       commentReplyEnabled: config.commentReplyEnabled || false,
       commentReplyTemplate: config.commentReplyTemplate || "",
-      followersOnly: config.followersOnly || false,
-      fallbackCommentMessage: config.fallbackCommentMessage || "",
       delaySeconds: config.delaySeconds || 0,
       welcomeCooldownDays: config.welcomeCooldownDays || 7,
       scheduleEnabled: config.scheduleEnabled || false,
@@ -812,41 +802,6 @@ export default function Automations() {
                       />
                       <p className="text-xs text-muted-foreground mt-1">
                         This reply will be posted publicly to the comment
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid gap-2 p-4 border rounded-lg bg-gradient-to-r from-blue-50 to-purple-50">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-blue-600" />
-                      <div>
-                        <Label htmlFor="followersOnly">Followers Only</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Only send DM to users who follow you
-                        </p>
-                      </div>
-                    </div>
-                    <Switch
-                      id="followersOnly"
-                      checked={formData.followersOnly}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, followersOnly: checked }))}
-                      data-testid="switch-followers-only"
-                    />
-                  </div>
-                  {formData.followersOnly && (
-                    <div className="mt-2">
-                      <Label className="text-sm">Fallback Comment (for non-followers)</Label>
-                      <Input
-                        placeholder="e.g., Follow us to get this exclusive content! 📩"
-                        value={formData.fallbackCommentMessage}
-                        onChange={(e) => setFormData(prev => ({ ...prev, fallbackCommentMessage: e.target.value }))}
-                        data-testid="input-fallback-comment"
-                        className="mt-1"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        This message will be posted as a comment reply for non-followers
                       </p>
                     </div>
                   )}
