@@ -978,35 +978,68 @@ export async function registerRoutes(
                       throw new Error("Account access token is missing");
                     }
                     
-                    // If followers only is enabled, we'll try to send DM first
-                    // If it fails (user doesn't follow), we'll reply with fallback comment
                     let dmSent = false;
                     let dmError: any = null;
+                    let isFollower = true; // Default to true if followersOnly is disabled
                     
-                    try {
-                      console.log("Sending DM to commenter:", commenterUsername);
-                      await sendPrivateReply(
-                        accessToken,
-                        igBusinessId,
-                        commentData.id,
-                        processedMessage
-                      );
-                      dmSent = true;
-                      console.log("DM sent successfully to", commenterUsername);
-                    } catch (dmErr: any) {
-                      dmError = dmErr;
-                      console.log("DM could not be sent:", dmErr?.response?.data?.error?.message || dmErr?.message);
+                    // If followers only is enabled, check if user is a follower FIRST
+                    if (followersOnly) {
+                      const commenterUserId = commentData.from?.id;
+                      if (commenterUserId) {
+                        // Check follower tracking database
+                        const followerRecord = await storage.getFollowerTracking(account.id, commenterUserId);
+                        isFollower = followerRecord ? followerRecord.isFollowing === true : false;
+                        console.log(`Followers only check for ${commenterUsername}: isFollower=${isFollower}`);
+                      } else {
+                        // If we don't have user ID, try to look up by username
+                        const followerByUsername = await storage.getFollowerByUsername(account.id, commenterUsername);
+                        isFollower = followerByUsername ? followerByUsername.isFollowing === true : false;
+                        console.log(`Followers only check by username for ${commenterUsername}: isFollower=${isFollower}`);
+                      }
+                      
+                      // If not a follower and followers only is enabled, skip DM and post fallback
+                      if (!isFollower) {
+                        console.log(`User ${commenterUsername} is not a follower - skipping DM`);
+                        if (fallbackCommentMessage) {
+                          const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
+                          console.log("Posting fallback comment for non-follower");
+                          try {
+                            await replyToComment(accessToken, commentData.id, processedFallback);
+                            console.log("Fallback comment posted successfully");
+                          } catch (fallbackErr: any) {
+                            console.log("Fallback comment failed:", fallbackErr?.message);
+                          }
+                        }
+                      }
                     }
                     
-                    // If followers only mode and DM failed, post fallback comment
-                    if (!dmSent && followersOnly && fallbackCommentMessage) {
-                      const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
-                      console.log("Posting fallback comment for non-follower");
+                    // Only attempt to send DM if user is a follower (or followersOnly is disabled)
+                    if (isFollower) {
                       try {
-                        await replyToComment(accessToken, commentData.id, processedFallback);
-                        console.log("Fallback comment posted successfully");
-                      } catch (fallbackErr: any) {
-                        console.log("Fallback comment failed:", fallbackErr?.message);
+                        console.log("Sending DM to commenter:", commenterUsername);
+                        await sendPrivateReply(
+                          accessToken,
+                          igBusinessId,
+                          commentData.id,
+                          processedMessage
+                        );
+                        dmSent = true;
+                        console.log("DM sent successfully to", commenterUsername);
+                      } catch (dmErr: any) {
+                        dmError = dmErr;
+                        console.log("DM could not be sent:", dmErr?.response?.data?.error?.message || dmErr?.message);
+                        
+                        // If DM failed due to API error (not follower issue), try fallback
+                        if (fallbackCommentMessage && !followersOnly) {
+                          const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
+                          console.log("Posting fallback comment due to DM error");
+                          try {
+                            await replyToComment(accessToken, commentData.id, processedFallback);
+                            console.log("Fallback comment posted successfully");
+                          } catch (fallbackErr: any) {
+                            console.log("Fallback comment failed:", fallbackErr?.message);
+                          }
+                        }
                       }
                     }
                     

@@ -248,37 +248,36 @@ export default function ScheduledMessages() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="space-y-4 md:space-y-6 px-2 md:px-0">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-bold" data-testid="text-page-title">Scheduled Messages</h1>
-            <p className="text-muted-foreground mt-1">
-              Schedule DMs to be sent at specific times (e.g., birthday wishes)
+            <h1 className="text-xl md:text-3xl font-bold" data-testid="text-page-title">Scheduled Messages</h1>
+            <p className="text-sm md:text-base text-muted-foreground mt-1">
+              Schedule DMs to be sent at specific times
             </p>
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button data-testid="button-schedule-message">
+              <Button data-testid="button-schedule-message" size="sm" className="w-full sm:w-auto">
                 <Plus className="mr-2 h-4 w-4" />
                 Schedule Message
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
+            <DialogContent className="max-w-[95vw] sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <Gift className="h-5 w-5 text-primary" />
+                  <DialogTitle className="flex items-center gap-2 text-base md:text-lg">
+                    <Gift className="h-4 w-4 md:h-5 md:w-5 text-primary" />
                     Schedule a Message
                   </DialogTitle>
-                  <DialogDescription>
+                  <DialogDescription className="text-xs md:text-sm">
                     Schedule a DM to be sent at a specific date and time.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="grid gap-3 md:gap-4 py-3 md:py-4">
+                  <div className="p-2 md:p-3 bg-amber-50 border border-amber-200 rounded-lg">
                     <p className="text-xs text-amber-800">
-                      <strong>Important:</strong> Instagram only allows sending DMs to users who have previously messaged your account. 
-                      This is an Instagram platform requirement.
+                      <strong>Note:</strong> Instagram only allows DMs to users who previously messaged your account.
                     </p>
                   </div>
                   <div className="grid gap-2">
@@ -443,15 +442,57 @@ export default function ScheduledMessages() {
           </Card>
         ) : (
           <Card className="overflow-hidden">
-            <CardHeader>
-              <CardTitle>Upcoming Messages</CardTitle>
-              <CardDescription>
+            <CardHeader className="py-3 md:py-6">
+              <CardTitle className="text-base md:text-lg">Upcoming Messages</CardTitle>
+              <CardDescription className="text-xs md:text-sm">
                 {scheduledMessages.filter((m: any) => m.status === "pending").length} pending messages
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="overflow-x-auto">
-              <Table className="min-w-[700px]">
+              {/* Mobile card view */}
+              <div className="block md:hidden divide-y">
+                {scheduledMessages.map((message: any) => (
+                  <div key={message.id} className="p-3 space-y-2" data-testid={`scheduled-message-mobile-${message.id}`}>
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2">
+                        <User className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div>
+                          {message.recipientUsername && (
+                            <p className="font-medium text-sm">@{message.recipientUsername}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground">@{getAccountName(message.instagramAccountId)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {getStatusBadge(message.status)}
+                        {message.status === "pending" && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => setDeleteMessage(message)}
+                            data-testid={`delete-scheduled-mobile-${message.id}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-muted-foreground line-clamp-2">{message.message}</p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Calendar className="h-3 w-3" />
+                      <span>{format(new Date(message.scheduledFor), "MMM d, h:mm a")}</span>
+                    </div>
+                    {message.status === "failed" && message.error && (
+                      <p className="text-xs text-destructive bg-destructive/10 p-2 rounded">{message.error}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              
+              {/* Desktop table view */}
+              <div className="hidden md:block overflow-x-auto">
+              <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Recipient</TableHead>
