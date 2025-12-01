@@ -7,8 +7,7 @@ import {
   Settings, 
   Instagram, 
   LogOut,
-  Menu,
-  CalendarClock
+  Menu
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -27,7 +26,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navItems = [
     { icon: LayoutDashboard, label: "Dashboard", href: "/" },
     { icon: Zap, label: "Automations", href: "/automations" },
-    { icon: CalendarClock, label: "Scheduled", href: "/scheduled" },
     { icon: Settings, label: "Settings", href: "/settings" },
   ];
 
