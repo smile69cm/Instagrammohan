@@ -1,5 +1,5 @@
 import { db } from "../drizzle";
-import { eq, and, desc, lte, sql } from "drizzle-orm";
+import { eq, and, desc, lte, sql, gte } from "drizzle-orm";
 import {
   users,
   instagramAccounts,
@@ -8,6 +8,8 @@ import {
   activityLog,
   automationBackups,
   automationQueue,
+  followerTracking,
+  scheduledMessages,
   type User,
   type InsertUser,
   type InstagramAccount,
@@ -22,6 +24,10 @@ import {
   type InsertAutomationBackup,
   type AutomationQueueItem,
   type InsertAutomationQueueItem,
+  type FollowerTracking,
+  type InsertFollowerTracking,
+  type ScheduledMessage,
+  type InsertScheduledMessage,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -76,6 +82,23 @@ export interface IStorage {
   markQueueItemFailed(id: string, error: string): Promise<void>;
   getQueueItemsByAutomationId(automationId: string): Promise<AutomationQueueItem[]>;
   deleteQueueItemsByAutomationId(automationId: string): Promise<void>;
+  
+  // Follower Tracking
+  getFollowerTracking(instagramAccountId: string, followerInstagramId: string): Promise<FollowerTracking | undefined>;
+  createFollowerTracking(tracking: InsertFollowerTracking): Promise<FollowerTracking>;
+  updateFollowerTracking(id: string, updates: Partial<FollowerTracking>): Promise<void>;
+  markWelcomeMessageSent(id: string): Promise<void>;
+  getFollowerTrackingByAccountId(instagramAccountId: string): Promise<FollowerTracking[]>;
+  canSendWelcomeMessage(instagramAccountId: string, followerInstagramId: string, cooldownDays: number): Promise<boolean>;
+  
+  // Scheduled Messages
+  createScheduledMessage(message: InsertScheduledMessage): Promise<ScheduledMessage>;
+  getScheduledMessagesByUserId(userId: string): Promise<ScheduledMessage[]>;
+  getPendingScheduledMessages(): Promise<ScheduledMessage[]>;
+  updateScheduledMessage(id: string, updates: Partial<ScheduledMessage>): Promise<void>;
+  deleteScheduledMessage(id: string): Promise<void>;
+  markScheduledMessageProcessed(id: string): Promise<void>;
+  markScheduledMessageFailed(id: string, error: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -307,7 +330,7 @@ export class DatabaseStorage implements IStorage {
 
   // Automation Queue
   async addToQueue(item: InsertAutomationQueueItem): Promise<AutomationQueueItem> {
-    const [queueItem] = await db.insert(automationQueue).values(item).returning();
+    const [queueItem] = await db.insert(automationQueue).values(item as any).returning();
     return queueItem;
   }
 
@@ -351,6 +374,120 @@ export class DatabaseStorage implements IStorage {
 
   async deleteQueueItemsByAutomationId(automationId: string): Promise<void> {
     await db.delete(automationQueue).where(eq(automationQueue.automationId, automationId));
+  }
+
+  // Follower Tracking
+  async getFollowerTracking(instagramAccountId: string, followerInstagramId: string): Promise<FollowerTracking | undefined> {
+    const [tracking] = await db.select().from(followerTracking)
+      .where(
+        and(
+          eq(followerTracking.instagramAccountId, instagramAccountId),
+          eq(followerTracking.followerInstagramId, followerInstagramId)
+        )
+      )
+      .limit(1);
+    return tracking;
+  }
+
+  async createFollowerTracking(tracking: InsertFollowerTracking): Promise<FollowerTracking> {
+    const [created] = await db.insert(followerTracking).values(tracking).returning();
+    return created;
+  }
+
+  async updateFollowerTracking(id: string, updates: Partial<FollowerTracking>): Promise<void> {
+    await db.update(followerTracking)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(followerTracking.id, id));
+  }
+
+  async markWelcomeMessageSent(id: string): Promise<void> {
+    await db.update(followerTracking)
+      .set({ 
+        welcomeMessageSent: true, 
+        welcomeMessageSentAt: new Date(),
+        updatedAt: new Date() 
+      })
+      .where(eq(followerTracking.id, id));
+  }
+
+  async getFollowerTrackingByAccountId(instagramAccountId: string): Promise<FollowerTracking[]> {
+    return await db.select().from(followerTracking)
+      .where(eq(followerTracking.instagramAccountId, instagramAccountId))
+      .orderBy(desc(followerTracking.createdAt));
+  }
+
+  async canSendWelcomeMessage(instagramAccountId: string, followerInstagramId: string, cooldownDays: number): Promise<boolean> {
+    const tracking = await this.getFollowerTracking(instagramAccountId, followerInstagramId);
+    
+    if (!tracking) {
+      return true;
+    }
+    
+    if (!tracking.isFollowing) {
+      return false;
+    }
+    
+    if (!tracking.welcomeMessageSent || !tracking.welcomeMessageSentAt) {
+      return true;
+    }
+    
+    const cooldownMs = cooldownDays * 24 * 60 * 60 * 1000;
+    const timeSinceLastMessage = Date.now() - new Date(tracking.welcomeMessageSentAt).getTime();
+    
+    return timeSinceLastMessage >= cooldownMs;
+  }
+
+  // Scheduled Messages
+  async createScheduledMessage(message: InsertScheduledMessage): Promise<ScheduledMessage> {
+    const [created] = await db.insert(scheduledMessages).values(message as any).returning();
+    return created;
+  }
+
+  async getScheduledMessagesByUserId(userId: string): Promise<ScheduledMessage[]> {
+    return await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.userId, userId))
+      .orderBy(desc(scheduledMessages.scheduledFor));
+  }
+
+  async getPendingScheduledMessages(): Promise<ScheduledMessage[]> {
+    return await db.select().from(scheduledMessages)
+      .where(
+        and(
+          eq(scheduledMessages.status, "pending"),
+          lte(scheduledMessages.scheduledFor, new Date())
+        )
+      )
+      .orderBy(scheduledMessages.scheduledFor);
+  }
+
+  async updateScheduledMessage(id: string, updates: Partial<ScheduledMessage>): Promise<void> {
+    await db.update(scheduledMessages)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(scheduledMessages.id, id));
+  }
+
+  async deleteScheduledMessage(id: string): Promise<void> {
+    await db.delete(scheduledMessages).where(eq(scheduledMessages.id, id));
+  }
+
+  async markScheduledMessageProcessed(id: string): Promise<void> {
+    await db.update(scheduledMessages)
+      .set({ 
+        status: "sent", 
+        processedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(scheduledMessages.id, id));
+  }
+
+  async markScheduledMessageFailed(id: string, error: string): Promise<void> {
+    await db.update(scheduledMessages)
+      .set({ 
+        status: "failed", 
+        error,
+        updatedAt: new Date()
+      })
+      .where(eq(scheduledMessages.id, id));
   }
 }
 

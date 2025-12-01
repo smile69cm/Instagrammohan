@@ -50,11 +50,48 @@ export const automations = pgTable("automations", {
     fallbackCommentMessage?: string;
     storyReactionReplyEnabled?: boolean;
     storyReactionMessage?: string;
+    welcomeCooldownDays?: number;
+    scheduleEnabled?: boolean;
+    scheduleStartTime?: string;
+    scheduleEndTime?: string;
+    scheduleDays?: string[];
   }>(),
   stats: jsonb("stats").$type<{
     totalReplies?: number;
     lastTriggered?: string;
   }>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const followerTracking = pgTable("follower_tracking", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  instagramAccountId: varchar("instagram_account_id").notNull().references(() => instagramAccounts.id),
+  followerInstagramId: text("follower_instagram_id").notNull(),
+  followerUsername: text("follower_username"),
+  isFollowing: boolean("is_following").default(true),
+  welcomeMessageSent: boolean("welcome_message_sent").default(false),
+  welcomeMessageSentAt: timestamp("welcome_message_sent_at"),
+  firstFollowedAt: timestamp("first_followed_at").defaultNow().notNull(),
+  lastFollowedAt: timestamp("last_followed_at").defaultNow().notNull(),
+  unfollowedAt: timestamp("unfollowed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const scheduledMessages = pgTable("scheduled_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  instagramAccountId: varchar("instagram_account_id").notNull().references(() => instagramAccounts.id),
+  recipientInstagramId: text("recipient_instagram_id").notNull(),
+  recipientUsername: text("recipient_username"),
+  message: text("message").notNull(),
+  links: jsonb("links").$type<{ label?: string; url: string; isButton?: boolean }[]>(),
+  scheduledFor: timestamp("scheduled_for").notNull(),
+  status: text("status").notNull().default("pending"),
+  processedAt: timestamp("processed_at"),
+  error: text("error"),
+  note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -125,6 +162,8 @@ export const insertGeneratedContentSchema = createInsertSchema(generatedContent)
 export const insertActivityLogSchema = createInsertSchema(activityLog).omit({ id: true, createdAt: true });
 export const insertAutomationBackupSchema = createInsertSchema(automationBackups).omit({ id: true, createdAt: true });
 export const insertAutomationQueueSchema = createInsertSchema(automationQueue).omit({ id: true, createdAt: true });
+export const insertFollowerTrackingSchema = createInsertSchema(followerTracking).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertScheduledMessageSchema = createInsertSchema(scheduledMessages).omit({ id: true, createdAt: true, updatedAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -147,3 +186,9 @@ export type InsertAutomationBackup = z.infer<typeof insertAutomationBackupSchema
 
 export type AutomationQueueItem = typeof automationQueue.$inferSelect;
 export type InsertAutomationQueueItem = z.infer<typeof insertAutomationQueueSchema>;
+
+export type FollowerTracking = typeof followerTracking.$inferSelect;
+export type InsertFollowerTracking = z.infer<typeof insertFollowerTrackingSchema>;
+
+export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
+export type InsertScheduledMessage = z.infer<typeof insertScheduledMessageSchema>;

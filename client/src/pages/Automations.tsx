@@ -85,7 +85,14 @@ const automationTypes = {
     color: "text-secondary",
     bg: "bg-secondary/10",
     label: "Welcome Message",
-    description: "Send a welcome DM when someone messages you for the first time",
+    description: "Send a welcome DM when someone first messages you (with 7-day cooldown and unfollow tracking)",
+  },
+  mention_reply: {
+    icon: AtSign,
+    color: "text-purple-600",
+    bg: "bg-purple-100",
+    label: "Mention Reply",
+    description: "Automatically reply when someone mentions you in a DM",
   },
 };
 
@@ -116,6 +123,11 @@ export default function Automations() {
     followersOnly: false,
     fallbackCommentMessage: "",
     delaySeconds: 0,
+    welcomeCooldownDays: 7,
+    scheduleEnabled: false,
+    scheduleStartTime: "",
+    scheduleEndTime: "",
+    scheduleDays: [] as string[],
   });
 
   const { data: automations = [], isLoading } = useQuery({
@@ -225,6 +237,11 @@ export default function Automations() {
       followersOnly: false,
       fallbackCommentMessage: "",
       delaySeconds: 0,
+      welcomeCooldownDays: 7,
+      scheduleEnabled: false,
+      scheduleStartTime: "",
+      scheduleEndTime: "",
+      scheduleDays: [],
     });
     setKeywordInput("");
     setLinkInput({ label: "", url: "" });
@@ -280,6 +297,11 @@ export default function Automations() {
         followersOnly: formData.followersOnly,
         fallbackCommentMessage: formData.fallbackCommentMessage,
         delaySeconds: formData.delaySeconds,
+        welcomeCooldownDays: formData.welcomeCooldownDays,
+        scheduleEnabled: formData.scheduleEnabled,
+        scheduleStartTime: formData.scheduleStartTime,
+        scheduleEndTime: formData.scheduleEndTime,
+        scheduleDays: formData.scheduleDays,
       },
     };
 
@@ -315,6 +337,11 @@ export default function Automations() {
       followersOnly: config.followersOnly || false,
       fallbackCommentMessage: config.fallbackCommentMessage || "",
       delaySeconds: config.delaySeconds || 0,
+      welcomeCooldownDays: config.welcomeCooldownDays || 7,
+      scheduleEnabled: config.scheduleEnabled || false,
+      scheduleStartTime: config.scheduleStartTime || "",
+      scheduleEndTime: config.scheduleEndTime || "",
+      scheduleDays: config.scheduleDays || [],
     });
     setKeywordInput("");
     setLinkInput({ label: "", url: "" });
@@ -731,7 +758,7 @@ export default function Automations() {
                   )}
                   <div className="flex gap-2">
                     <Input
-                      placeholder="Label (optional)"
+                      placeholder="Button label (e.g., Open Link)"
                       value={linkInput.label}
                       onChange={(e) => setLinkInput(prev => ({ ...prev, label: e.target.value }))}
                       className="flex-1"
@@ -755,6 +782,9 @@ export default function Automations() {
                       <Plus className="h-4 w-4" />
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Links will show as clickable buttons in the DM if they have a label
+                  </p>
                 </div>
 
                 <div className="grid gap-2 p-4 border rounded-lg">
@@ -847,6 +877,75 @@ export default function Automations() {
                     <span className="text-sm text-muted-foreground">seconds (0-300)</span>
                   </div>
                 </div>
+
+                <div className="grid gap-2 p-4 border rounded-lg bg-gradient-to-r from-green-50 to-teal-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-green-600" />
+                      <div>
+                        <Label htmlFor="scheduleEnabled">Schedule Active Hours</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Only send DMs during specific hours and days
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="scheduleEnabled"
+                      checked={formData.scheduleEnabled}
+                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, scheduleEnabled: checked }))}
+                      data-testid="switch-schedule-enabled"
+                    />
+                  </div>
+                  {formData.scheduleEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex items-center gap-4">
+                        <div>
+                          <Label className="text-xs">Start Time</Label>
+                          <Input
+                            type="time"
+                            value={formData.scheduleStartTime}
+                            onChange={(e) => setFormData(prev => ({ ...prev, scheduleStartTime: e.target.value }))}
+                            className="w-32"
+                            data-testid="input-schedule-start"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">End Time</Label>
+                          <Input
+                            type="time"
+                            value={formData.scheduleEndTime}
+                            onChange={(e) => setFormData(prev => ({ ...prev, scheduleEndTime: e.target.value }))}
+                            className="w-32"
+                            data-testid="input-schedule-end"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs mb-2 block">Active Days</Label>
+                        <div className="flex flex-wrap gap-2">
+                          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                            <Badge
+                              key={day}
+                              variant={formData.scheduleDays.includes(day) ? "default" : "outline"}
+                              className="cursor-pointer"
+                              onClick={() => {
+                                setFormData(prev => ({
+                                  ...prev,
+                                  scheduleDays: prev.scheduleDays.includes(day)
+                                    ? prev.scheduleDays.filter(d => d !== day)
+                                    : [...prev.scheduleDays, day]
+                                }));
+                              }}
+                              data-testid={`schedule-day-${day.toLowerCase()}`}
+                            >
+                              {day}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -899,6 +998,37 @@ export default function Automations() {
                     This message will be sent as a DM reply
                   </p>
                 </div>
+
+                {formData.type === "welcome_message" && (
+                  <div className="grid gap-2 p-4 border rounded-lg bg-gradient-to-r from-amber-50 to-orange-50">
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-amber-600" />
+                      <div>
+                        <Label htmlFor="welcomeCooldownDays">Cooldown Period</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Prevent duplicate welcome messages after unfollow/refollow
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      <Input
+                        id="welcomeCooldownDays"
+                        type="number"
+                        min="1"
+                        max="365"
+                        placeholder="7"
+                        value={formData.welcomeCooldownDays || ""}
+                        onChange={(e) => setFormData(prev => ({ ...prev, welcomeCooldownDays: parseInt(e.target.value) || 7 }))}
+                        className="w-24"
+                        data-testid="input-cooldown-days"
+                      />
+                      <span className="text-sm text-muted-foreground">days (1-365)</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Users who unfollow and refollow within this period won't receive another welcome message
+                    </p>
+                  </div>
+                )}
 
                 <div className="grid gap-2">
                   <Label>Links (Optional)</Label>

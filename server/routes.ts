@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { clerk, protectedRoute } from "./lib/clerk";
 import { generateContent, generateAutoReply } from "./lib/openai";
-import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage } from "./lib/instagram";
+import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage, sendDirectMessageWithButtons, type DMLink } from "./lib/instagram";
 
 function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
   let result = template;
@@ -25,6 +25,40 @@ function formatLinksAsButtons(links: Array<{ label?: string; url: string; isButt
     }
   }
   return formatted.trim();
+}
+
+function isWithinSchedule(config: any): boolean {
+  if (!config?.scheduleEnabled) return true;
+  
+  const now = new Date();
+  const currentDay = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()];
+  
+  if (config.scheduleDays && config.scheduleDays.length > 0) {
+    const normalizedDays = config.scheduleDays.map((d: string) => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase());
+    if (!normalizedDays.includes(currentDay)) {
+      return false;
+    }
+  }
+  
+  if (config.scheduleStartTime && config.scheduleEndTime) {
+    const currentTime = now.getHours() * 100 + now.getMinutes();
+    const [startH, startM] = config.scheduleStartTime.split(':').map(Number);
+    const [endH, endM] = config.scheduleEndTime.split(':').map(Number);
+    const startTime = startH * 100 + (startM || 0);
+    const endTime = endH * 100 + (endM || 0);
+    
+    if (startTime < endTime) {
+      if (currentTime < startTime || currentTime > endTime) {
+        return false;
+      }
+    } else {
+      if (currentTime < startTime && currentTime > endTime) {
+        return false;
+      }
+    }
+  }
+  
+  return true;
 }
 
 function delay(ms: number): Promise<void> {
@@ -634,6 +668,132 @@ export async function registerRoutes(
   });
 
   // ========================================
+  // SCHEDULED MESSAGES ROUTES
+  // ========================================
+
+  // Get all scheduled messages for user
+  app.get("/api/scheduled-messages", protectedRoute, async (req, res) => {
+    try {
+      const auth = req.auth();
+      const clerkId = auth.userId;
+      const user = await storage.getUserByClerkId(clerkId!);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const messages = await storage.getScheduledMessagesByUserId(user.id);
+      res.json(messages);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Create scheduled message
+  app.post("/api/scheduled-messages", protectedRoute, async (req, res) => {
+    try {
+      const auth = req.auth();
+      const clerkId = auth.userId;
+      const user = await storage.getUserByClerkId(clerkId!);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const { instagramAccountId, recipientInstagramId, recipientUsername, message, links, scheduledFor, note } = req.body;
+      
+      if (!instagramAccountId || !recipientInstagramId || !message || !scheduledFor) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const accounts = await storage.getInstagramAccountsByUserId(user.id);
+      if (!accounts.find(a => a.id === instagramAccountId)) {
+        return res.status(403).json({ message: "Instagram account not found or not yours" });
+      }
+
+      const scheduled = await storage.createScheduledMessage({
+        userId: user.id,
+        instagramAccountId,
+        recipientInstagramId,
+        recipientUsername,
+        message,
+        links,
+        scheduledFor: new Date(scheduledFor),
+        note,
+        status: "pending"
+      });
+
+      res.json(scheduled);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Update scheduled message
+  app.patch("/api/scheduled-messages/:id", protectedRoute, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const auth = req.auth();
+      const clerkId = auth.userId;
+      const user = await storage.getUserByClerkId(clerkId!);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const messages = await storage.getScheduledMessagesByUserId(user.id);
+      const message = messages.find(m => m.id === id);
+      
+      if (!message) {
+        return res.status(404).json({ message: "Scheduled message not found" });
+      }
+
+      if (message.status !== "pending") {
+        return res.status(400).json({ message: "Can only update pending messages" });
+      }
+
+      const updates: any = {};
+      if (req.body.message !== undefined) updates.message = req.body.message;
+      if (req.body.links !== undefined) updates.links = req.body.links;
+      if (req.body.scheduledFor !== undefined) updates.scheduledFor = new Date(req.body.scheduledFor);
+      if (req.body.note !== undefined) updates.note = req.body.note;
+      if (req.body.recipientInstagramId !== undefined) updates.recipientInstagramId = req.body.recipientInstagramId;
+      if (req.body.recipientUsername !== undefined) updates.recipientUsername = req.body.recipientUsername;
+
+      await storage.updateScheduledMessage(id, updates);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Delete scheduled message
+  app.delete("/api/scheduled-messages/:id", protectedRoute, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const auth = req.auth();
+      const clerkId = auth.userId;
+      const user = await storage.getUserByClerkId(clerkId!);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const messages = await storage.getScheduledMessagesByUserId(user.id);
+      const message = messages.find(m => m.id === id);
+      
+      if (!message) {
+        return res.status(404).json({ message: "Scheduled message not found" });
+      }
+
+      await storage.deleteScheduledMessage(id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ========================================
   // INSTAGRAM WEBHOOK ROUTES
   // ========================================
 
@@ -891,7 +1051,7 @@ export async function registerRoutes(
                 // Get active auto_dm_reply and welcome_message automations for this account
                 const automations = await storage.getAutomationsByInstagramAccountId(account.id);
                 const activeDmAutomations = automations.filter(
-                  (a: any) => a.isActive && (a.type === "auto_dm_reply" || a.type === "welcome_message")
+                  (a: any) => a.isActive && (a.type === "auto_dm_reply" || a.type === "welcome_message" || a.type === "mention_reply")
                 );
 
                 for (const automation of activeDmAutomations) {
@@ -900,6 +1060,12 @@ export async function registerRoutes(
                   const messageTemplate = config?.messageTemplate || "";
                   const links = config?.links || [];
                   const delaySeconds = config?.delaySeconds || 0;
+                  
+                  // Check schedule
+                  if (!isWithinSchedule(config)) {
+                    console.log(`Automation ${automation.title} skipped - outside schedule`);
+                    continue;
+                  }
                   
                   const isWelcomeMessage = automation.type === "welcome_message";
 
@@ -911,6 +1077,17 @@ export async function registerRoutes(
 
                   if (shouldRespond && messageTemplate) {
                     console.log(`${automation.type} triggered for automation:`, automation.title);
+                    
+                    // For welcome automation, check cooldown
+                    if (isWelcomeMessage) {
+                      const cooldownDays = config?.welcomeCooldownDays || 7;
+                      const canSend = await storage.canSendWelcomeMessage(account.id, senderId, cooldownDays);
+                      
+                      if (!canSend) {
+                        console.log(`Welcome message skipped for ${senderId} - within ${cooldownDays} day cooldown`);
+                        continue;
+                      }
+                    }
                     
                     // Apply delay if configured
                     if (delaySeconds > 0) {
@@ -924,21 +1101,51 @@ export async function registerRoutes(
                         keyword: matchedKeyword || '',
                       };
                       
-                      let replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
+                      const replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
                       
-                      if (links.length > 0) {
-                        replyMessage += formatLinksAsButtons(links);
+                      console.log("Sending DM reply with button support");
+                      
+                      // Use button-enabled function if any links are marked as buttons
+                      const hasButtonLinks = links.some((l: any) => l.isButton);
+                      if (hasButtonLinks) {
+                        await sendDirectMessageWithButtons(
+                          account.accessToken,
+                          senderId,
+                          replyMessage,
+                          links
+                        );
+                      } else {
+                        let fullMessage = replyMessage;
+                        if (links.length > 0) {
+                          fullMessage += formatLinksAsButtons(links);
+                        }
+                        await sendDirectMessage(
+                          account.accessToken,
+                          senderId,
+                          fullMessage
+                        );
                       }
                       
-                      console.log("Sending DM reply");
-                      
-                      await sendDirectMessage(
-                        account.accessToken,
-                        senderId,
-                        replyMessage
-                      );
-                      
                       console.log("DM reply sent successfully to", senderId);
+                      
+                      // For welcome message, track that we sent one
+                      if (isWelcomeMessage) {
+                        const existingTracking = await storage.getFollowerTracking(account.id, senderId);
+                        if (existingTracking) {
+                          await storage.markWelcomeMessageSent(existingTracking.id);
+                        } else {
+                          const newTracking = await storage.createFollowerTracking({
+                            instagramAccountId: account.id,
+                            followerInstagramId: senderId,
+                            isFollowing: true,
+                            welcomeMessageSent: true,
+                            welcomeMessageSentAt: new Date(),
+                            firstFollowedAt: new Date(),
+                            lastFollowedAt: new Date()
+                          });
+                          await storage.markWelcomeMessageSent(newTracking.id);
+                        }
+                      }
                       
                       const currentStats = automation.stats as any || {};
                       await storage.updateAutomation(automation.id, {
@@ -981,6 +1188,12 @@ export async function registerRoutes(
                     const links = config?.links || [];
                     const delaySeconds = config?.delaySeconds || 0;
                     
+                    // Check schedule
+                    if (!isWithinSchedule(config)) {
+                      console.log(`Story reaction automation ${automation.title} skipped - outside schedule`);
+                      continue;
+                    }
+                    
                     if (messageTemplate) {
                       console.log("Story reaction automation triggered:", automation.title);
                       
@@ -990,13 +1203,19 @@ export async function registerRoutes(
                       
                       try {
                         const templateVars = { username: senderId };
-                        let replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
+                        const replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
                         
-                        if (links.length > 0) {
-                          replyMessage += formatLinksAsButtons(links);
+                        // Use button-enabled function if any links are marked as buttons
+                        const hasButtonLinks = links.some((l: any) => l.isButton);
+                        if (hasButtonLinks) {
+                          await sendDirectMessageWithButtons(account.accessToken, senderId, replyMessage, links);
+                        } else {
+                          let fullMessage = replyMessage;
+                          if (links.length > 0) {
+                            fullMessage += formatLinksAsButtons(links);
+                          }
+                          await sendDirectMessage(account.accessToken, senderId, fullMessage);
                         }
-                        
-                        await sendDirectMessage(account.accessToken, senderId, replyMessage);
                         console.log("Story reaction reply sent to", senderId);
                         
                         const currentStats = automation.stats as any || {};
@@ -1033,6 +1252,72 @@ export async function registerRoutes(
       res.sendStatus(500);
     }
   });
+
+  // ========================================
+  // SCHEDULED MESSAGE PROCESSOR
+  // ========================================
+  
+  // Process scheduled messages every minute
+  setInterval(async () => {
+    try {
+      const pendingMessages = await storage.getPendingScheduledMessages();
+      
+      for (const msg of pendingMessages) {
+        try {
+          const account = await storage.getInstagramAccount(msg.instagramAccountId);
+          if (!account) {
+            await storage.markScheduledMessageFailed(msg.id, "Instagram account not found");
+            continue;
+          }
+          
+          console.log(`Processing scheduled message to ${msg.recipientInstagramId}`);
+          
+          // Use button-enabled function if any links are marked as buttons
+          const links = msg.links as any[] || [];
+          const hasButtonLinks = links.some((l: any) => l.isButton);
+          
+          if (hasButtonLinks) {
+            await sendDirectMessageWithButtons(
+              account.accessToken,
+              msg.recipientInstagramId,
+              msg.message,
+              links
+            );
+          } else {
+            let fullMessage = msg.message;
+            if (links.length > 0) {
+              fullMessage += "\n\n";
+              for (const link of links) {
+                if (link.label) {
+                  fullMessage += `${link.label}\n${link.url}\n\n`;
+                } else {
+                  fullMessage += `${link.url}\n\n`;
+                }
+              }
+            }
+            await sendDirectMessage(account.accessToken, msg.recipientInstagramId, fullMessage.trim());
+          }
+          
+          await storage.markScheduledMessageProcessed(msg.id);
+          
+          // Log activity
+          await storage.createActivityLog({
+            userId: msg.userId,
+            action: "scheduled_dm_sent",
+            targetUsername: msg.recipientUsername || msg.recipientInstagramId,
+            details: msg.note || `Scheduled message sent: "${msg.message.substring(0, 50)}..."`,
+          });
+          
+          console.log(`Scheduled message sent successfully to ${msg.recipientInstagramId}`);
+        } catch (err: any) {
+          console.error(`Failed to send scheduled message ${msg.id}:`, err?.message);
+          await storage.markScheduledMessageFailed(msg.id, err?.message || "Unknown error");
+        }
+      }
+    } catch (err: any) {
+      console.error("Error processing scheduled messages:", err?.message);
+    }
+  }, 60000); // Check every minute
 
   return httpServer;
 }
