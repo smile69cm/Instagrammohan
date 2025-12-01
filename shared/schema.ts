@@ -43,6 +43,9 @@ export const automations = pgTable("automations", {
     mediaId?: string;
     mediaPermalink?: string;
     messageTemplate?: string;
+    links?: { label?: string; url: string }[];
+    commentReplyEnabled?: boolean;
+    commentReplyTemplate?: string;
   }>(),
   stats: jsonb("stats").$type<{
     totalReplies?: number;
@@ -86,6 +89,26 @@ export const automationBackups = pgTable("automation_backups", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const automationQueue = pgTable("automation_queue", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  automationId: varchar("automation_id").notNull().references(() => automations.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  payload: jsonb("payload").$type<{
+    commentId?: string;
+    commentText?: string;
+    commenterUsername?: string;
+    commenterUserId?: string;
+    mediaId?: string;
+    messageType?: string;
+  }>().notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").default(0),
+  error: text("error"),
+  scheduledFor: timestamp("scheduled_for").defaultNow().notNull(),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertInstagramAccountSchema = createInsertSchema(instagramAccounts).omit({ id: true, createdAt: true, updatedAt: true });
@@ -93,6 +116,7 @@ export const insertAutomationSchema = createInsertSchema(automations).omit({ id:
 export const insertGeneratedContentSchema = createInsertSchema(generatedContent).omit({ id: true, createdAt: true });
 export const insertActivityLogSchema = createInsertSchema(activityLog).omit({ id: true, createdAt: true });
 export const insertAutomationBackupSchema = createInsertSchema(automationBackups).omit({ id: true, createdAt: true });
+export const insertAutomationQueueSchema = createInsertSchema(automationQueue).omit({ id: true, createdAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -112,3 +136,6 @@ export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
 
 export type AutomationBackup = typeof automationBackups.$inferSelect;
 export type InsertAutomationBackup = z.infer<typeof insertAutomationBackupSchema>;
+
+export type AutomationQueueItem = typeof automationQueue.$inferSelect;
+export type InsertAutomationQueueItem = z.infer<typeof insertAutomationQueueSchema>;
