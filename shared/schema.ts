@@ -21,6 +21,7 @@ export const instagramAccounts = pgTable("instagram_accounts", {
   pageId: text("page_id"),
   tokenType: text("token_type").default("bearer"),
   expiresIn: integer("expires_in"),
+  tokenRefreshedAt: timestamp("token_refreshed_at").defaultNow(),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -46,8 +47,6 @@ export const automations = pgTable("automations", {
     links?: { label?: string; url: string; isButton?: boolean }[];
     commentReplyEnabled?: boolean;
     commentReplyTemplate?: string;
-    followersOnly?: boolean;
-    fallbackCommentMessage?: string;
     storyReactionReplyEnabled?: boolean;
     storyReactionMessage?: string;
     welcomeCooldownDays?: number;
@@ -88,23 +87,6 @@ export const followingTracking = pgTable("following_tracking", {
   firstFollowedAt: timestamp("first_followed_at").defaultNow().notNull(),
   lastFollowedAt: timestamp("last_followed_at").defaultNow().notNull(),
   unfollowedAt: timestamp("unfollowed_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
-
-export const scheduledMessages = pgTable("scheduled_messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  instagramAccountId: varchar("instagram_account_id").notNull().references(() => instagramAccounts.id),
-  recipientInstagramId: text("recipient_instagram_id").notNull(),
-  recipientUsername: text("recipient_username"),
-  message: text("message").notNull(),
-  links: jsonb("links").$type<{ label?: string; url: string; isButton?: boolean }[]>(),
-  scheduledFor: timestamp("scheduled_for").notNull(),
-  status: text("status").notNull().default("pending"),
-  processedAt: timestamp("processed_at"),
-  error: text("error"),
-  note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -167,6 +149,15 @@ export const automationQueue = pgTable("automation_queue", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const processedComments = pgTable("processed_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  instagramAccountId: varchar("instagram_account_id").notNull().references(() => instagramAccounts.id),
+  commentId: text("comment_id").notNull(),
+  automationId: varchar("automation_id").notNull().references(() => automations.id),
+  action: text("action").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertInstagramAccountSchema = createInsertSchema(instagramAccounts).omit({ id: true, createdAt: true, updatedAt: true });
@@ -177,7 +168,7 @@ export const insertAutomationBackupSchema = createInsertSchema(automationBackups
 export const insertAutomationQueueSchema = createInsertSchema(automationQueue).omit({ id: true, createdAt: true });
 export const insertFollowerTrackingSchema = createInsertSchema(followerTracking).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertFollowingTrackingSchema = createInsertSchema(followingTracking).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertScheduledMessageSchema = createInsertSchema(scheduledMessages).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertProcessedCommentSchema = createInsertSchema(processedComments).omit({ id: true, createdAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -207,5 +198,5 @@ export type InsertFollowerTracking = z.infer<typeof insertFollowerTrackingSchema
 export type FollowingTracking = typeof followingTracking.$inferSelect;
 export type InsertFollowingTracking = z.infer<typeof insertFollowingTrackingSchema>;
 
-export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
-export type InsertScheduledMessage = z.infer<typeof insertScheduledMessageSchema>;
+export type ProcessedComment = typeof processedComments.$inferSelect;
+export type InsertProcessedComment = z.infer<typeof insertProcessedCommentSchema>;
