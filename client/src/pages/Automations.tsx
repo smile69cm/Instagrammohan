@@ -85,7 +85,7 @@ const automationTypes = {
     color: "text-secondary",
     bg: "bg-secondary/10",
     label: "Welcome Message",
-    description: "Send a welcome DM when someone first messages you (with 7-day cooldown and unfollow tracking)",
+    description: "Send a welcome DM when someone first messages you (responds to all messages with cooldown)",
   },
   mention_reply: {
     icon: AtSign,
@@ -951,51 +951,57 @@ export default function Automations() {
 
             {formData.type !== "comment_to_dm" && (
               <>
-                <div className="grid gap-2">
-                  <Label htmlFor="triggerWords">Trigger Keywords</Label>
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {formData.keywords.map((keyword, index) => (
-                      <Badge 
-                        key={index} 
-                        variant="secondary" 
-                        className="px-3 py-1 flex items-center gap-1"
-                        data-testid={`trigger-chip-${index}`}
-                      >
-                        {keyword}
-                        <button
-                          type="button"
-                          onClick={() => removeKeyword(keyword)}
-                          className="ml-1 hover:text-red-500 transition-colors"
-                          data-testid={`remove-trigger-${index}`}
+                {formData.type !== "welcome_message" && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="triggerWords">Trigger Keywords</Label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {formData.keywords.map((keyword, index) => (
+                        <Badge 
+                          key={index} 
+                          variant="secondary" 
+                          className="px-3 py-1 flex items-center gap-1"
+                          data-testid={`trigger-chip-${index}`}
                         >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
+                          {keyword}
+                          <button
+                            type="button"
+                            onClick={() => removeKeyword(keyword)}
+                            className="ml-1 hover:text-red-500 transition-colors"
+                            data-testid={`remove-trigger-${index}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                    <Input
+                      id="triggerWords"
+                      placeholder="Type a keyword and press Enter"
+                      value={keywordInput}
+                      onChange={(e) => setKeywordInput(e.target.value)}
+                      onKeyDown={handleKeywordKeyDown}
+                      data-testid="input-trigger-words"
+                    />
+                    <p className="text-xs text-muted-foreground">When someone DMs these keywords, they'll receive your reply. Leave empty to respond to all messages.</p>
                   </div>
-                  <Input
-                    id="triggerWords"
-                    placeholder="Type a keyword and press Enter"
-                    value={keywordInput}
-                    onChange={(e) => setKeywordInput(e.target.value)}
-                    onKeyDown={handleKeywordKeyDown}
-                    data-testid="input-trigger-words"
-                  />
-                  <p className="text-xs text-muted-foreground">When someone DMs these keywords, they'll receive your reply. Leave empty to respond to all messages.</p>
-                </div>
+                )}
 
                 <div className="grid gap-2">
-                  <Label htmlFor="dmMessageTemplate">Reply Message *</Label>
+                  <Label htmlFor="dmMessageTemplate">{formData.type === "welcome_message" ? "Welcome Message *" : "Reply Message *"}</Label>
                   <Textarea
                     id="dmMessageTemplate"
-                    placeholder="e.g., Thanks for reaching out! Here's the information you requested."
+                    placeholder={formData.type === "welcome_message" 
+                      ? "e.g., Hey! Thanks for reaching out 👋 We're happy to help!"
+                      : "e.g., Thanks for reaching out! Here's the information you requested."}
                     value={formData.messageTemplate}
                     onChange={(e) => setFormData(prev => ({ ...prev, messageTemplate: e.target.value }))}
                     data-testid="input-dm-message-template"
                     rows={3}
                   />
                   <p className="text-xs text-muted-foreground">
-                    This message will be sent as a DM reply
+                    {formData.type === "welcome_message" 
+                      ? "This message will be sent to anyone who messages you for the first time"
+                      : "This message will be sent as a DM reply"}
                   </p>
                 </div>
 

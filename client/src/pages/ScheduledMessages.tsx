@@ -48,6 +48,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Plus,
   Calendar,
   Clock,
@@ -62,6 +68,7 @@ import {
   Loader2,
   Gift,
   Cake,
+  Info,
 } from "lucide-react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import { useApiClient } from "@/lib/api";
@@ -108,7 +115,7 @@ export default function ScheduledMessages() {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to schedule message",
+        description: error.response?.data?.message || error.message || "Failed to schedule message",
         variant: "destructive",
       });
     },
@@ -127,7 +134,7 @@ export default function ScheduledMessages() {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to delete message",
+        description: error.response?.data?.message || error.message || "Failed to delete message",
         variant: "destructive",
       });
     },
@@ -268,6 +275,12 @@ export default function ScheduledMessages() {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-xs text-amber-800">
+                      <strong>Important:</strong> Instagram only allows sending DMs to users who have previously messaged your account. 
+                      This is an Instagram platform requirement.
+                    </p>
+                  </div>
                   <div className="grid gap-2">
                     <Label htmlFor="account">Instagram Account *</Label>
                     <Select
@@ -300,7 +313,7 @@ export default function ScheduledMessages() {
                       data-testid="input-recipient-username"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Enter the Instagram username of the recipient (must have interacted with your account before)
+                      The recipient must have messaged your Instagram account before (Instagram API requirement)
                     </p>
                   </div>
 
@@ -429,15 +442,16 @@ export default function ScheduledMessages() {
             </CardContent>
           </Card>
         ) : (
-          <Card>
+          <Card className="overflow-hidden">
             <CardHeader>
               <CardTitle>Upcoming Messages</CardTitle>
               <CardDescription>
                 {scheduledMessages.filter((m: any) => m.status === "pending").length} pending messages
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Table>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+              <Table className="min-w-[700px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Recipient</TableHead>
@@ -505,19 +519,28 @@ export default function ScheduledMessages() {
                           </Button>
                         )}
                         {message.status === "failed" && message.error && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title={message.error}
-                          >
-                            <AlertCircle className="h-4 w-4 text-destructive" />
-                          </Button>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                >
+                                  <AlertCircle className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="left" className="max-w-[300px]">
+                                <p className="text-xs">{message.error}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
         )}

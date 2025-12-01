@@ -1370,7 +1370,20 @@ export async function registerRoutes(
           console.log(`Scheduled message sent successfully to ${recipientId}`);
         } catch (err: any) {
           console.error(`Failed to send scheduled message ${msg.id}:`, err?.message);
-          await storage.markScheduledMessageFailed(msg.id, err?.message || "Unknown error");
+          
+          // Parse Instagram API error for more helpful message
+          const errorData = err?.response?.data?.error;
+          let errorMessage = err?.message || "Unknown error";
+          
+          if (errorData?.code === 100 && errorData?.error_subcode === 2534014) {
+            errorMessage = `User not found: The recipient (@${msg.recipientUsername || msg.recipientInstagramId}) must have messaged your Instagram account before you can send them a DM.`;
+          } else if (errorData?.code === 100) {
+            errorMessage = `Instagram API error: ${errorData?.message || 'Invalid request. The recipient may not be reachable.'}`;
+          } else if (errorData?.message) {
+            errorMessage = `Instagram error: ${errorData.message}`;
+          }
+          
+          await storage.markScheduledMessageFailed(msg.id, errorMessage);
         }
       }
     } catch (err: any) {
