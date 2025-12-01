@@ -11,7 +11,10 @@ import {
   Pencil,
   Trash2,
   X,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Clock,
+  Users,
+  Sparkles
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -74,15 +77,15 @@ const automationTypes = {
     icon: Heart,
     color: "text-accent",
     bg: "bg-accent/10",
-    label: "Story Reaction",
-    description: "Auto-react to stories from followers",
+    label: "Story Reaction Reply",
+    description: "When someone reacts to your story, send them an automatic DM",
   },
   welcome_message: {
     icon: UserPlus,
     color: "text-secondary",
     bg: "bg-secondary/10",
     label: "Welcome Message",
-    description: "Send a welcome message when someone sends you a DM",
+    description: "Send a welcome DM when someone messages you for the first time",
   },
 };
 
@@ -107,9 +110,12 @@ export default function Automations() {
     keywords: [] as string[],
     messageTemplate: "",
     prompt: "",
-    links: [] as { label?: string; url: string }[],
+    links: [] as { label?: string; url: string; isButton?: boolean }[],
     commentReplyEnabled: false,
     commentReplyTemplate: "",
+    followersOnly: false,
+    fallbackCommentMessage: "",
+    delaySeconds: 0,
   });
 
   const { data: automations = [], isLoading } = useQuery({
@@ -216,6 +222,9 @@ export default function Automations() {
       links: [],
       commentReplyEnabled: false,
       commentReplyTemplate: "",
+      followersOnly: false,
+      fallbackCommentMessage: "",
+      delaySeconds: 0,
     });
     setKeywordInput("");
     setLinkInput({ label: "", url: "" });
@@ -245,7 +254,7 @@ export default function Automations() {
       return;
     }
 
-    if ((formData.type === "auto_dm_reply" || formData.type === "welcome_message") && !formData.messageTemplate) {
+    if ((formData.type === "auto_dm_reply" || formData.type === "welcome_message" || formData.type === "story_reaction") && !formData.messageTemplate) {
       toast({
         title: "Missing fields",
         description: "Please enter a reply message",
@@ -268,6 +277,9 @@ export default function Automations() {
         links: formData.links,
         commentReplyEnabled: formData.commentReplyEnabled,
         commentReplyTemplate: formData.commentReplyTemplate,
+        followersOnly: formData.followersOnly,
+        fallbackCommentMessage: formData.fallbackCommentMessage,
+        delaySeconds: formData.delaySeconds,
       },
     };
 
@@ -300,6 +312,9 @@ export default function Automations() {
       links: config.links || [],
       commentReplyEnabled: config.commentReplyEnabled || false,
       commentReplyTemplate: config.commentReplyTemplate || "",
+      followersOnly: config.followersOnly || false,
+      fallbackCommentMessage: config.fallbackCommentMessage || "",
+      delaySeconds: config.delaySeconds || 0,
     });
     setKeywordInput("");
     setLinkInput({ label: "", url: "" });
@@ -770,6 +785,67 @@ export default function Automations() {
                       </p>
                     </div>
                   )}
+                </div>
+
+                <div className="grid gap-2 p-4 border rounded-lg bg-gradient-to-r from-blue-50 to-purple-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-blue-600" />
+                      <div>
+                        <Label htmlFor="followersOnly">Followers Only</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Only send DM to users who follow you
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="followersOnly"
+                      checked={formData.followersOnly}
+                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, followersOnly: checked }))}
+                      data-testid="switch-followers-only"
+                    />
+                  </div>
+                  {formData.followersOnly && (
+                    <div className="mt-2">
+                      <Label className="text-sm">Fallback Comment (for non-followers)</Label>
+                      <Input
+                        placeholder="e.g., Follow us to get this exclusive content! 📩"
+                        value={formData.fallbackCommentMessage}
+                        onChange={(e) => setFormData(prev => ({ ...prev, fallbackCommentMessage: e.target.value }))}
+                        data-testid="input-fallback-comment"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This message will be posted as a comment reply for non-followers
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-2 p-4 border rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-purple-600" />
+                    <div>
+                      <Label htmlFor="delaySeconds">Response Delay</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Wait before sending (appears more natural)
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Input
+                      id="delaySeconds"
+                      type="number"
+                      min="0"
+                      max="300"
+                      placeholder="0"
+                      value={formData.delaySeconds || ""}
+                      onChange={(e) => setFormData(prev => ({ ...prev, delaySeconds: parseInt(e.target.value) || 0 }))}
+                      className="w-24"
+                      data-testid="input-delay-seconds"
+                    />
+                    <span className="text-sm text-muted-foreground">seconds (0-300)</span>
+                  </div>
                 </div>
               </>
             )}
