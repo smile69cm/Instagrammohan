@@ -4,7 +4,6 @@ import { useUser, useClerk } from "@clerk/clerk-react";
 import { 
   LayoutDashboard, 
   Zap, 
-  PenTool, 
   Settings, 
   Instagram, 
   LogOut,
@@ -27,7 +26,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navItems = [
     { icon: LayoutDashboard, label: "Dashboard", href: "/" },
     { icon: Zap, label: "Automations", href: "/automations" },
-    { icon: PenTool, label: "Content AI", href: "/content" },
     { icon: Settings, label: "Settings", href: "/settings" },
   ];
 
