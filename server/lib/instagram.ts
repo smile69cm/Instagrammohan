@@ -308,3 +308,54 @@ export async function getCommentDetails(accessToken: string, commentId: string) 
     return null;
   }
 }
+
+export async function replyToComment(accessToken: string, commentId: string, message: string) {
+  try {
+    console.log("Replying to comment:", commentId);
+    console.log("Reply message:", message);
+    
+    const response = await axios.post(
+      `${INSTAGRAM_GRAPH_URL}/${commentId}/replies`,
+      {
+        message: message
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+    
+    console.log("Comment reply sent successfully:", response.data);
+    return response.data;
+  } catch (error: any) {
+    const errorData = error?.response?.data?.error;
+    console.error("Error replying to comment:", errorData || error?.message);
+    console.error("Status:", error?.response?.status);
+    
+    if (error?.response?.status === 400) {
+      console.log("Trying Facebook Graph API endpoint as fallback...");
+      try {
+        const fbResponse = await axios.post(
+          `${FACEBOOK_GRAPH_URL}/${commentId}/replies`,
+          {
+            message: message
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+        console.log("Comment reply sent via Facebook API:", fbResponse.data);
+        return fbResponse.data;
+      } catch (fbError: any) {
+        console.error("Facebook API fallback also failed:", fbError?.response?.data || fbError?.message);
+        throw fbError;
+      }
+    }
+    throw error;
+  }
+}
