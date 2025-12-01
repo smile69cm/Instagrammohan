@@ -10,7 +10,6 @@ import NotFound from "@/pages/not-found";
 // Pages
 import Dashboard from "@/pages/Dashboard";
 import Automations from "@/pages/Automations";
-import Content from "@/pages/Content";
 import Settings from "@/pages/Settings";
 import Auth from "@/pages/Auth";
 import SignUpPage from "@/pages/SignUp";
@@ -43,9 +42,6 @@ function Router() {
       </Route>
       <Route path="/automations">
         <ProtectedRoute component={Automations} />
-      </Route>
-      <Route path="/content">
-        <ProtectedRoute component={Content} />
       </Route>
       <Route path="/settings">
         <ProtectedRoute component={Settings} />
