@@ -10,7 +10,7 @@ import {
   automationQueue,
   followerTracking,
   followingTracking,
-  scheduledMessages,
+  processedComments,
   type User,
   type InsertUser,
   type InstagramAccount,
@@ -29,8 +29,8 @@ import {
   type InsertFollowerTracking,
   type FollowingTracking,
   type InsertFollowingTracking,
-  type ScheduledMessage,
-  type InsertScheduledMessage,
+  type ProcessedComment,
+  type InsertProcessedComment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -42,6 +42,7 @@ export interface IStorage {
   // Instagram Accounts
   getInstagramAccount(id: string): Promise<InstagramAccount | undefined>;
   getInstagramAccountsByUserId(userId: string): Promise<InstagramAccount[]>;
+  getAllActiveInstagramAccounts(): Promise<InstagramAccount[]>;
   getInstagramAccountByInstagramUserId(instagramUserId: string): Promise<InstagramAccount | undefined>;
   getInstagramAccountByBusinessId(igBusinessAccountId: string): Promise<InstagramAccount | undefined>;
   createInstagramAccount(account: InsertInstagramAccount): Promise<InstagramAccount>;
@@ -94,20 +95,16 @@ export interface IStorage {
   markWelcomeMessageSent(id: string): Promise<void>;
   getFollowerTrackingByAccountId(instagramAccountId: string): Promise<FollowerTracking[]>;
   canSendWelcomeMessage(instagramAccountId: string, followerInstagramId: string, cooldownDays: number): Promise<boolean>;
+  upsertFollowerWithManualId(instagramAccountId: string, username: string, instagramId: string): Promise<FollowerTracking>;
   
   // Following Tracking
   getFollowingByUsername(instagramAccountId: string, username: string): Promise<FollowingTracking | undefined>;
   createFollowingTracking(tracking: InsertFollowingTracking): Promise<FollowingTracking>;
   updateFollowingTracking(id: string, updates: Partial<FollowingTracking>): Promise<void>;
   
-  // Scheduled Messages
-  createScheduledMessage(message: InsertScheduledMessage): Promise<ScheduledMessage>;
-  getScheduledMessagesByUserId(userId: string): Promise<ScheduledMessage[]>;
-  getPendingScheduledMessages(): Promise<ScheduledMessage[]>;
-  updateScheduledMessage(id: string, updates: Partial<ScheduledMessage>): Promise<void>;
-  deleteScheduledMessage(id: string): Promise<void>;
-  markScheduledMessageProcessed(id: string): Promise<void>;
-  markScheduledMessageFailed(id: string, error: string): Promise<void>;
+  // Processed Comments (deduplication)
+  isCommentProcessed(instagramAccountId: string, commentId: string, automationId: string): Promise<boolean>;
+  markCommentProcessed(instagramAccountId: string, commentId: string, automationId: string, action: string): Promise<ProcessedComment>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -142,6 +139,12 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
+  async getAllActiveInstagramAccounts(): Promise<InstagramAccount[]> {
+    return await db.select().from(instagramAccounts).where(
+      eq(instagramAccounts.isActive, true)
+    );
+  }
+
   async getInstagramAccountByInstagramUserId(instagramUserId: string): Promise<InstagramAccount | undefined> {
     const [account] = await db.select().from(instagramAccounts).where(eq(instagramAccounts.instagramUserId, instagramUserId)).limit(1);
     return account;
@@ -172,6 +175,7 @@ export class DatabaseStorage implements IStorage {
         .set({ 
           accessToken: insertAccount.accessToken,
           expiresIn: insertAccount.expiresIn,
+          tokenRefreshedAt: new Date(),
           updatedAt: new Date()
         })
         .where(eq(instagramAccounts.id, existing[0].id));
@@ -185,7 +189,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateInstagramAccountToken(id: string, accessToken: string, expiresIn: number): Promise<void> {
     await db.update(instagramAccounts)
-      .set({ accessToken, expiresIn, updatedAt: new Date() })
+      .set({ accessToken, expiresIn, tokenRefreshedAt: new Date(), updatedAt: new Date() })
       .where(eq(instagramAccounts.id, id));
   }
 
@@ -319,6 +323,7 @@ export class DatabaseStorage implements IStorage {
         isActive: true, 
         accessToken, 
         expiresIn,
+        tokenRefreshedAt: new Date(),
         updatedAt: new Date() 
       })
       .where(eq(instagramAccounts.id, id));
@@ -459,6 +464,39 @@ export class DatabaseStorage implements IStorage {
     return timeSinceLastMessage >= cooldownMs;
   }
 
+  async upsertFollowerWithManualId(instagramAccountId: string, username: string, instagramId: string): Promise<FollowerTracking> {
+    const cleanUsername = username.toLowerCase().replace('@', '');
+    
+    const existingByUsername = await this.getFollowerByUsername(instagramAccountId, cleanUsername);
+    
+    if (existingByUsername) {
+      await this.updateFollowerTracking(existingByUsername.id, {
+        followerInstagramId: instagramId,
+        lastFollowedAt: new Date(),
+      });
+      return { ...existingByUsername, followerInstagramId: instagramId };
+    }
+    
+    const existingById = await this.getFollowerTracking(instagramAccountId, instagramId);
+    
+    if (existingById) {
+      await this.updateFollowerTracking(existingById.id, {
+        followerUsername: cleanUsername,
+        lastFollowedAt: new Date(),
+      });
+      return { ...existingById, followerUsername: cleanUsername };
+    }
+    
+    return await this.createFollowerTracking({
+      instagramAccountId,
+      followerInstagramId: instagramId,
+      followerUsername: cleanUsername,
+      isFollowing: true,
+      firstFollowedAt: new Date(),
+      lastFollowedAt: new Date(),
+    });
+  }
+
   // Following Tracking
   async getFollowingByUsername(instagramAccountId: string, username: string): Promise<FollowingTracking | undefined> {
     const cleanUsername = username.toLowerCase().replace('@', '');
@@ -484,57 +522,42 @@ export class DatabaseStorage implements IStorage {
       .where(eq(followingTracking.id, id));
   }
 
-  // Scheduled Messages
-  async createScheduledMessage(message: InsertScheduledMessage): Promise<ScheduledMessage> {
-    const [created] = await db.insert(scheduledMessages).values(message as any).returning();
-    return created;
-  }
-
-  async getScheduledMessagesByUserId(userId: string): Promise<ScheduledMessage[]> {
-    return await db.select().from(scheduledMessages)
-      .where(eq(scheduledMessages.userId, userId))
-      .orderBy(desc(scheduledMessages.scheduledFor));
-  }
-
-  async getPendingScheduledMessages(): Promise<ScheduledMessage[]> {
-    return await db.select().from(scheduledMessages)
+  // Processed Comments (deduplication)
+  async isCommentProcessed(instagramAccountId: string, commentId: string, automationId: string): Promise<boolean> {
+    const [existing] = await db.select().from(processedComments)
       .where(
         and(
-          eq(scheduledMessages.status, "pending"),
-          lte(scheduledMessages.scheduledFor, new Date())
+          eq(processedComments.instagramAccountId, instagramAccountId),
+          eq(processedComments.commentId, commentId),
+          eq(processedComments.automationId, automationId)
         )
       )
-      .orderBy(scheduledMessages.scheduledFor);
+      .limit(1);
+    return !!existing;
   }
 
-  async updateScheduledMessage(id: string, updates: Partial<ScheduledMessage>): Promise<void> {
-    await db.update(scheduledMessages)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(scheduledMessages.id, id));
-  }
-
-  async deleteScheduledMessage(id: string): Promise<void> {
-    await db.delete(scheduledMessages).where(eq(scheduledMessages.id, id));
-  }
-
-  async markScheduledMessageProcessed(id: string): Promise<void> {
-    await db.update(scheduledMessages)
-      .set({ 
-        status: "sent", 
-        processedAt: new Date(),
-        updatedAt: new Date()
-      })
-      .where(eq(scheduledMessages.id, id));
-  }
-
-  async markScheduledMessageFailed(id: string, error: string): Promise<void> {
-    await db.update(scheduledMessages)
-      .set({ 
-        status: "failed", 
-        error,
-        updatedAt: new Date()
-      })
-      .where(eq(scheduledMessages.id, id));
+  async markCommentProcessed(instagramAccountId: string, commentId: string, automationId: string, action: string): Promise<ProcessedComment> {
+    const [existing] = await db.select().from(processedComments)
+      .where(
+        and(
+          eq(processedComments.instagramAccountId, instagramAccountId),
+          eq(processedComments.commentId, commentId),
+          eq(processedComments.automationId, automationId)
+        )
+      )
+      .limit(1);
+    
+    if (existing) {
+      return existing;
+    }
+    
+    const [created] = await db.insert(processedComments).values({
+      instagramAccountId,
+      commentId,
+      automationId,
+      action,
+    }).returning();
+    return created;
   }
 }
 
