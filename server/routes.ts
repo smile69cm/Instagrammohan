@@ -438,9 +438,14 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Automation not found" });
       }
 
+      // Delete associated queue items first
+      await storage.deleteQueueItemsByAutomationId(id);
+      
+      // Then delete the automation
       await storage.deleteAutomation(id);
       res.json({ success: true });
     } catch (error: any) {
+      console.error("Error deleting automation:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -531,7 +536,7 @@ export async function registerRoutes(
         totalReplies += stats?.totalReplies || 0;
       }
 
-      // Calculate activity by day for the chart (last 7 days)
+      // Calculate activity by day for the chart (last 7 days) based on actual data
       const now = new Date();
       const weekData = [];
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -539,8 +544,10 @@ export async function registerRoutes(
       for (let i = 6; i >= 0; i--) {
         const date = new Date(now);
         date.setDate(date.getDate() - i);
-        const dayStart = new Date(date.setHours(0, 0, 0, 0));
-        const dayEnd = new Date(date.setHours(23, 59, 59, 999));
+        const dayStart = new Date(date);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(date);
+        dayEnd.setHours(23, 59, 59, 999);
         
         const dayActivities = activities.filter(a => {
           const activityDate = new Date(a.createdAt);
@@ -549,7 +556,10 @@ export async function registerRoutes(
         
         weekData.push({
           name: days[dayStart.getDay()],
-          value: dayActivities.length * 10 + Math.floor(Math.random() * 50), // Amplify for visibility
+          date: dayStart.toISOString().split('T')[0],
+          value: dayActivities.length,
+          dmsSent: dayActivities.filter(a => a.action === 'dm_sent').length,
+          commentsProcessed: dayActivities.filter(a => a.action === 'comment_processed').length,
         });
       }
 
@@ -699,8 +709,29 @@ export async function registerRoutes(
                 if (matchedKeyword) {
                   console.log(`Keyword "${matchedKeyword}" matched in comment`);
                   
+                  // Add to queue for reliable processing
                   try {
-                    // Use the account's Instagram access token (fresh from OAuth)
+                    await storage.addToQueue({
+                      automationId: automation.id,
+                      userId: account.userId,
+                      payload: {
+                        commentId: commentData.id,
+                        commentText: commentData.text,
+                        commenterUsername: commentData.from?.username,
+                        commenterUserId: commentData.from?.id,
+                        mediaId: commentData.media?.id,
+                        messageType: "comment_to_dm",
+                      },
+                      status: "pending",
+                      scheduledFor: new Date(),
+                    });
+                    console.log(`Added comment automation to queue for ${commentData.from?.username}`);
+                  } catch (queueError: any) {
+                    console.error("Failed to add to queue, processing immediately:", queueError?.message);
+                  }
+                  
+                  // Process immediately as well for real-time response
+                  try {
                     const accessToken = account.accessToken;
                     const igBusinessId = account.igBusinessAccountId || igUserId;
                     
@@ -720,6 +751,12 @@ export async function registerRoutes(
                     );
                     
                     console.log("Private reply sent successfully");
+                    
+                    // Send public comment reply if enabled
+                    if (config?.commentReplyEnabled && config?.commentReplyTemplate) {
+                      console.log("Comment reply is enabled, would post public reply");
+                      // TODO: Implement public comment reply when API is available
+                    }
 
                     // Update automation stats
                     const currentStats = automation.stats as any || {};
@@ -735,12 +772,13 @@ export async function registerRoutes(
                     await storage.createActivityLog({
                       userId: account.userId,
                       automationId: automation.id,
-                      action: "comment_dm_sent",
+                      action: "dm_sent",
                       targetUsername: commentData.from?.username || "unknown",
                       details: `Sent DM for keyword "${matchedKeyword}" on comment`,
                     });
                   } catch (sendError: any) {
                     console.error("Failed to send private reply:", sendError?.message);
+                    // The queue will retry this later if it fails
                   }
                 }
               }
