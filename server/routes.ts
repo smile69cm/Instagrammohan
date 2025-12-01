@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { clerk, protectedRoute } from "./lib/clerk";
 import { generateContent, generateAutoReply } from "./lib/openai";
-import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage, sendDirectMessageWithButtons, type DMLink } from "./lib/instagram";
+import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage, sendDirectMessageWithButtons, lookupInstagramUserId, type DMLink } from "./lib/instagram";
 
 function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
   let result = template;
@@ -67,6 +67,33 @@ function isWithinSchedule(config: any): boolean {
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// In-memory cache to prevent duplicate webhook processing
+const webhookProcessingCache = new Map<string, number>();
+const WEBHOOK_CACHE_TTL = 60000; // 1 minute
+
+function isWebhookDuplicate(key: string): boolean {
+  const now = Date.now();
+  const lastProcessed = webhookProcessingCache.get(key);
+  
+  // Clean up old entries periodically
+  if (webhookProcessingCache.size > 1000) {
+    const entries = Array.from(webhookProcessingCache.entries());
+    for (const [k, v] of entries) {
+      if (now - v > WEBHOOK_CACHE_TTL) {
+        webhookProcessingCache.delete(k);
+      }
+    }
+  }
+  
+  if (lastProcessed && now - lastProcessed < WEBHOOK_CACHE_TTL) {
+    return true; // Duplicate
+  }
+  
+  webhookProcessingCache.set(key, now);
+  return false;
+}
+
 import { insertAutomationSchema, insertGeneratedContentSchema, insertActivityLogSchema } from "@shared/schema";
 import { z } from "zod";
 import "./types";
@@ -674,8 +701,8 @@ export async function registerRoutes(
   // SCHEDULED MESSAGES ROUTES
   // ========================================
 
-  // Get all scheduled messages for user
-  app.get("/api/scheduled-messages", protectedRoute, async (req, res) => {
+  // Get known users (commenters) who can receive DMs
+  app.get("/api/instagram/accounts/:accountId/known-users", protectedRoute, async (req, res) => {
     try {
       const auth = req.auth();
       const clerkId = auth.userId;
@@ -683,78 +710,90 @@ export async function registerRoutes(
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });
-      }
-
-      const messages = await storage.getScheduledMessagesByUserId(user.id);
-      res.json(messages);
-    } catch (error: any) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Create scheduled message
-  app.post("/api/scheduled-messages", protectedRoute, async (req, res) => {
-    try {
-      const auth = req.auth();
-      const clerkId = auth.userId;
-      const user = await storage.getUserByClerkId(clerkId!);
-      
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      const { instagramAccountId, recipientInstagramId, recipientUsername, message, links, scheduledFor, note } = req.body;
-      
-      // Require either recipientInstagramId or recipientUsername
-      if (!instagramAccountId || (!recipientInstagramId && !recipientUsername) || !message || !scheduledFor) {
-        return res.status(400).json({ message: "Missing required fields. Provide either Instagram ID or username." });
       }
 
       const accounts = await storage.getInstagramAccountsByUserId(user.id);
-      const selectedAccount = accounts.find(a => a.id === instagramAccountId);
-      if (!selectedAccount) {
-        return res.status(403).json({ message: "Instagram account not found or not yours" });
-      }
-
-      // If no recipientInstagramId provided, try to look up from follower tracking
-      let finalRecipientId = recipientInstagramId;
-      const cleanUsername = recipientUsername?.replace('@', '').toLowerCase();
+      const account = accounts.find(a => a.id === req.params.accountId);
       
-      if (!finalRecipientId && cleanUsername) {
-        // Try to find the user's Instagram ID from follower tracking
-        const follower = await storage.getFollowerByUsername(selectedAccount.id, cleanUsername);
-        if (follower && follower.followerInstagramId) {
-          finalRecipientId = follower.followerInstagramId;
-          console.log(`Resolved username @${cleanUsername} to Instagram ID: ${finalRecipientId}`);
-        } else {
-          console.log(`Username @${cleanUsername} not found in followers - will store and try to resolve later`);
-          // Store without ID - will try to resolve when sending
-          finalRecipientId = `pending:${cleanUsername}`;
-        }
+      if (!account) {
+        return res.status(404).json({ message: "Instagram account not found" });
       }
 
-      const scheduled = await storage.createScheduledMessage({
-        userId: user.id,
-        instagramAccountId,
-        recipientInstagramId: finalRecipientId,
-        recipientUsername: cleanUsername || recipientUsername,
-        message,
-        links,
-        scheduledFor: new Date(scheduledFor),
-        note,
-        status: "pending"
+      // Get all tracked followers/commenters for this account
+      const followers = await storage.getFollowerTrackingByAccountId(account.id);
+      
+      // Return only users who have Instagram IDs (can receive DMs)
+      const knownUsers = followers
+        .filter(f => f.followerInstagramId && f.followerUsername)
+        .map(f => ({
+          instagramId: f.followerInstagramId,
+          username: f.followerUsername,
+        }));
+      
+      res.json(knownUsers);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Validate username - check if it exists in our tracked users
+  app.post("/api/instagram/validate-username", protectedRoute, async (req, res) => {
+    try {
+      const auth = req.auth();
+      const clerkId = auth.userId;
+      const user = await storage.getUserByClerkId(clerkId!);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const { instagramAccountId, username } = req.body;
+      
+      if (!instagramAccountId || !username) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const accounts = await storage.getInstagramAccountsByUserId(user.id);
+      const account = accounts.find(a => a.id === instagramAccountId);
+      
+      if (!account) {
+        return res.status(403).json({ message: "Instagram account not found" });
+      }
+
+      const cleanUsername = username.replace('@', '').toLowerCase();
+      
+      const follower = await storage.getFollowerByUsername(account.id, cleanUsername);
+      if (follower && follower.followerInstagramId) {
+        return res.json({
+          found: true,
+          instagramId: follower.followerInstagramId,
+          username: follower.followerUsername,
+          source: "follower"
+        });
+      }
+      
+      const following = await storage.getFollowingByUsername(account.id, cleanUsername);
+      if (following && following.followingInstagramId) {
+        return res.json({
+          found: true,
+          instagramId: following.followingInstagramId,
+          username: following.followingUsername,
+          source: "following"
+        });
+      }
+      
+      res.json({
+        found: false,
+        message: "User not found in your tracked interactions. They need to comment on your posts or message you first, or you can enter their Instagram User ID manually."
       });
-
-      res.json(scheduled);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });
 
-  // Update scheduled message
-  app.patch("/api/scheduled-messages/:id", protectedRoute, async (req, res) => {
+  // Register manual Instagram ID for a username
+  app.post("/api/instagram/register-manual-id", protectedRoute, async (req, res) => {
     try {
-      const { id } = req.params;
       const auth = req.auth();
       const clerkId = auth.userId;
       const user = await storage.getUserByClerkId(clerkId!);
@@ -763,53 +802,31 @@ export async function registerRoutes(
         return res.status(404).json({ message: "User not found" });
       }
 
-      const messages = await storage.getScheduledMessagesByUserId(user.id);
-      const message = messages.find(m => m.id === id);
+      const { instagramAccountId, username, instagramId } = req.body;
       
-      if (!message) {
-        return res.status(404).json({ message: "Scheduled message not found" });
+      if (!instagramAccountId || !username || !instagramId) {
+        return res.status(400).json({ message: "Missing required fields" });
       }
 
-      if (message.status !== "pending") {
-        return res.status(400).json({ message: "Can only update pending messages" });
+      const cleanInstagramId = instagramId.toString().trim();
+      if (!/^\d{10,25}$/.test(cleanInstagramId)) {
+        return res.status(400).json({ message: "Invalid Instagram User ID format. It should be a numeric ID (10-25 digits)." });
       }
 
-      const updates: any = {};
-      if (req.body.message !== undefined) updates.message = req.body.message;
-      if (req.body.links !== undefined) updates.links = req.body.links;
-      if (req.body.scheduledFor !== undefined) updates.scheduledFor = new Date(req.body.scheduledFor);
-      if (req.body.note !== undefined) updates.note = req.body.note;
-      if (req.body.recipientInstagramId !== undefined) updates.recipientInstagramId = req.body.recipientInstagramId;
-      if (req.body.recipientUsername !== undefined) updates.recipientUsername = req.body.recipientUsername;
-
-      await storage.updateScheduledMessage(id, updates);
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Delete scheduled message
-  app.delete("/api/scheduled-messages/:id", protectedRoute, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const auth = req.auth();
-      const clerkId = auth.userId;
-      const user = await storage.getUserByClerkId(clerkId!);
+      const accounts = await storage.getInstagramAccountsByUserId(user.id);
+      const account = accounts.find(a => a.id === instagramAccountId);
       
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
+      if (!account) {
+        return res.status(403).json({ message: "Instagram account not found" });
       }
 
-      const messages = await storage.getScheduledMessagesByUserId(user.id);
-      const message = messages.find(m => m.id === id);
+      await storage.upsertFollowerWithManualId(account.id, username, cleanInstagramId);
       
-      if (!message) {
-        return res.status(404).json({ message: "Scheduled message not found" });
-      }
-
-      await storage.deleteScheduledMessage(id);
-      res.json({ success: true });
+      res.json({
+        success: true,
+        message: "User ID registered successfully",
+        instagramId: cleanInstagramId
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -852,6 +869,13 @@ export async function registerRoutes(
               // Handle new comment
               const commentData = change.value;
               console.log("Received comment:", commentData);
+              
+              // Check for duplicate webhook delivery
+              const commentDedupKey = `comment:${commentData.id}`;
+              if (isWebhookDuplicate(commentDedupKey)) {
+                console.log(`Duplicate webhook for comment ${commentData.id}, skipping`);
+                continue;
+              }
               
               // Find Instagram account - try business ID first, then regular ID
               let account = await storage.getInstagramAccountByBusinessId(igUserId);
@@ -923,11 +947,41 @@ export async function registerRoutes(
                 if (matchedKeyword) {
                   console.log(`Keyword "${matchedKeyword}" matched in comment`);
                   
+                  // Check if this comment has already been processed for this automation
+                  const alreadyProcessed = await storage.isCommentProcessed(account.id, commentData.id, automation.id);
+                  if (alreadyProcessed) {
+                    console.log(`Comment ${commentData.id} already processed for automation ${automation.id}, skipping`);
+                    continue;
+                  }
+                  
                   const commenterUsername = commentData.from?.username || "friend";
-                  const followersOnly = config?.followersOnly || false;
-                  const fallbackCommentMessage = config?.fallbackCommentMessage || "";
+                  const commenterUserId = commentData.from?.id;
                   const delaySeconds = config?.delaySeconds || 0;
                   const links = config?.links || [];
+                  
+                  // Auto-track commenter for future reference
+                  if (commenterUserId) {
+                    try {
+                      const existingFollower = await storage.getFollowerTracking(account.id, commenterUserId);
+                      if (!existingFollower) {
+                        await storage.createFollowerTracking({
+                          instagramAccountId: account.id,
+                          followerInstagramId: commenterUserId,
+                          followerUsername: commenterUsername,
+                          isFollowing: false,
+                          firstFollowedAt: new Date(),
+                          lastFollowedAt: new Date()
+                        });
+                        console.log(`Auto-tracked commenter: ${commenterUsername} (ID: ${commenterUserId})`);
+                      } else if (!existingFollower.followerUsername && commenterUsername) {
+                        await storage.updateFollowerTracking(existingFollower.id, { 
+                          followerUsername: commenterUsername 
+                        });
+                      }
+                    } catch (trackErr: any) {
+                      console.log("Error auto-tracking commenter:", trackErr?.message);
+                    }
+                  }
                   
                   // Replace template variables
                   const templateVars = {
@@ -942,34 +996,21 @@ export async function registerRoutes(
                     processedMessage += formatLinksAsButtons(links);
                   }
                   
-                  // Add to queue for reliable processing
-                  try {
-                    await storage.addToQueue({
-                      automationId: automation.id,
-                      userId: account.userId,
-                      payload: {
-                        commentId: commentData.id,
-                        commentText: commentData.text,
-                        commenterUsername: commentData.from?.username,
-                        commenterUserId: commentData.from?.id,
-                        mediaId: commentData.media?.id,
-                        messageType: "comment_to_dm",
-                      },
-                      status: "pending",
-                      scheduledFor: new Date(Date.now() + (delaySeconds * 1000)),
-                    });
-                    console.log(`Added comment automation to queue for ${commentData.from?.username}`);
-                  } catch (queueError: any) {
-                    console.log("Queue not available, processing immediately");
-                  }
-                  
                   // Apply delay if configured
                   if (delaySeconds > 0) {
                     console.log(`Waiting ${delaySeconds} seconds before sending...`);
                     await delay(delaySeconds * 1000);
                   }
                   
-                  // Process immediately
+                  // Mark comment as processed FIRST to prevent duplicate processing
+                  await storage.markCommentProcessed(
+                    account.id,
+                    commentData.id,
+                    automation.id,
+                    "processing"
+                  );
+                  
+                  // Process the comment
                   try {
                     const accessToken = account.accessToken;
                     const igBusinessId = account.igBusinessAccountId || igUserId;
@@ -979,68 +1020,20 @@ export async function registerRoutes(
                     }
                     
                     let dmSent = false;
-                    let dmError: any = null;
-                    let isFollower = true; // Default to true if followersOnly is disabled
                     
-                    // If followers only is enabled, check if user is a follower FIRST
-                    if (followersOnly) {
-                      const commenterUserId = commentData.from?.id;
-                      if (commenterUserId) {
-                        // Check follower tracking database
-                        const followerRecord = await storage.getFollowerTracking(account.id, commenterUserId);
-                        isFollower = followerRecord ? followerRecord.isFollowing === true : false;
-                        console.log(`Followers only check for ${commenterUsername}: isFollower=${isFollower}`);
-                      } else {
-                        // If we don't have user ID, try to look up by username
-                        const followerByUsername = await storage.getFollowerByUsername(account.id, commenterUsername);
-                        isFollower = followerByUsername ? followerByUsername.isFollowing === true : false;
-                        console.log(`Followers only check by username for ${commenterUsername}: isFollower=${isFollower}`);
-                      }
-                      
-                      // If not a follower and followers only is enabled, skip DM and post fallback
-                      if (!isFollower) {
-                        console.log(`User ${commenterUsername} is not a follower - skipping DM`);
-                        if (fallbackCommentMessage) {
-                          const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
-                          console.log("Posting fallback comment for non-follower");
-                          try {
-                            await replyToComment(accessToken, commentData.id, processedFallback);
-                            console.log("Fallback comment posted successfully");
-                          } catch (fallbackErr: any) {
-                            console.log("Fallback comment failed:", fallbackErr?.message);
-                          }
-                        }
-                      }
-                    }
-                    
-                    // Only attempt to send DM if user is a follower (or followersOnly is disabled)
-                    if (isFollower) {
-                      try {
-                        console.log("Sending DM to commenter:", commenterUsername);
-                        await sendPrivateReply(
-                          accessToken,
-                          igBusinessId,
-                          commentData.id,
-                          processedMessage
-                        );
-                        dmSent = true;
-                        console.log("DM sent successfully to", commenterUsername);
-                      } catch (dmErr: any) {
-                        dmError = dmErr;
-                        console.log("DM could not be sent:", dmErr?.response?.data?.error?.message || dmErr?.message);
-                        
-                        // If DM failed due to API error (not follower issue), try fallback
-                        if (fallbackCommentMessage && !followersOnly) {
-                          const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
-                          console.log("Posting fallback comment due to DM error");
-                          try {
-                            await replyToComment(accessToken, commentData.id, processedFallback);
-                            console.log("Fallback comment posted successfully");
-                          } catch (fallbackErr: any) {
-                            console.log("Fallback comment failed:", fallbackErr?.message);
-                          }
-                        }
-                      }
+                    // Try to send private reply via DM (Instagram allows this for all commenters)
+                    try {
+                      console.log("Sending DM to commenter:", commenterUsername);
+                      await sendPrivateReply(
+                        accessToken,
+                        igBusinessId,
+                        commentData.id,
+                        processedMessage
+                      );
+                      dmSent = true;
+                      console.log("DM sent successfully to", commenterUsername);
+                    } catch (dmErr: any) {
+                      console.log("DM could not be sent:", dmErr?.response?.data?.error?.message || dmErr?.message);
                     }
                     
                     // Send public comment reply if enabled (regardless of DM status)
@@ -1064,15 +1057,22 @@ export async function registerRoutes(
                       }
                     });
 
+                    // Mark comment as processed to prevent duplicates
+                    await storage.markCommentProcessed(
+                      account.id, 
+                      commentData.id, 
+                      automation.id, 
+                      dmSent ? "dm_sent" : "comment_reply"
+                    );
+                    console.log(`Comment ${commentData.id} marked as processed`);
+
                     // Log activity
                     await storage.createActivityLog({
                       userId: account.userId,
                       automationId: automation.id,
                       action: dmSent ? "dm_sent" : "comment_reply_sent",
                       targetUsername: commenterUsername,
-                      details: dmSent 
-                        ? `Sent DM for keyword "${matchedKeyword}"` 
-                        : `Posted comment reply for "${matchedKeyword}" (user not following)`,
+                      details: `Sent ${dmSent ? 'DM' : 'comment reply'} for keyword "${matchedKeyword}"`,
                     });
                   } catch (sendError: any) {
                     console.log("Automation processing error:", sendError?.message);
@@ -1109,10 +1109,10 @@ export async function registerRoutes(
                 
                 console.log("Found matching account:", account.username);
 
-                // Get active auto_dm_reply and welcome_message automations for this account
+                // Get active auto_dm_reply automations for this account (removed welcome_message)
                 const automations = await storage.getAutomationsByInstagramAccountId(account.id);
                 const activeDmAutomations = automations.filter(
-                  (a: any) => a.isActive && (a.type === "auto_dm_reply" || a.type === "welcome_message" || a.type === "mention_reply")
+                  (a: any) => a.isActive && (a.type === "auto_dm_reply" || a.type === "mention_reply")
                 );
 
                 for (const automation of activeDmAutomations) {
@@ -1127,28 +1127,13 @@ export async function registerRoutes(
                     console.log(`Automation ${automation.title} skipped - outside schedule`);
                     continue;
                   }
-                  
-                  const isWelcomeMessage = automation.type === "welcome_message";
 
                   const messageTextLower = messageText.toLowerCase();
                   const matchedKeyword = triggerWords.find((tw: string) => messageTextLower.includes(tw.toLowerCase()));
                   const keywordMatch = triggerWords.length === 0 || matchedKeyword;
-                  
-                  const shouldRespond = isWelcomeMessage || keywordMatch;
 
-                  if (shouldRespond && messageTemplate) {
+                  if (keywordMatch && messageTemplate) {
                     console.log(`${automation.type} triggered for automation:`, automation.title);
-                    
-                    // For welcome automation, check cooldown
-                    if (isWelcomeMessage) {
-                      const cooldownDays = config?.welcomeCooldownDays || 7;
-                      const canSend = await storage.canSendWelcomeMessage(account.id, senderId, cooldownDays);
-                      
-                      if (!canSend) {
-                        console.log(`Welcome message skipped for ${senderId} - within ${cooldownDays} day cooldown`);
-                        continue;
-                      }
-                    }
                     
                     // Apply delay if configured
                     if (delaySeconds > 0) {
@@ -1169,44 +1154,29 @@ export async function registerRoutes(
                       // Use button-enabled function if any links are marked as buttons
                       const hasButtonLinks = links.some((l: any) => l.isButton);
                       if (hasButtonLinks) {
-                        await sendDirectMessageWithButtons(
-                          account.accessToken,
-                          senderId,
-                          replyMessage,
-                          links
-                        );
+                        await sendDirectMessageWithButtons({
+                          accessToken: account.accessToken,
+                          recipientId: senderId,
+                          message: replyMessage,
+                          links,
+                          igBusinessAccountId: account.igBusinessAccountId || undefined,
+                          pageAccessToken: account.pageAccessToken || undefined
+                        });
                       } else {
                         let fullMessage = replyMessage;
                         if (links.length > 0) {
                           fullMessage += formatLinksAsButtons(links);
                         }
-                        await sendDirectMessage(
-                          account.accessToken,
-                          senderId,
-                          fullMessage
-                        );
+                        await sendDirectMessage({
+                          accessToken: account.accessToken,
+                          recipientId: senderId,
+                          message: fullMessage,
+                          igBusinessAccountId: account.igBusinessAccountId || undefined,
+                          pageAccessToken: account.pageAccessToken || undefined
+                        });
                       }
                       
                       console.log("DM reply sent successfully to", senderId);
-                      
-                      // For welcome message, track that we sent one
-                      if (isWelcomeMessage) {
-                        const existingTracking = await storage.getFollowerTracking(account.id, senderId);
-                        if (existingTracking) {
-                          await storage.markWelcomeMessageSent(existingTracking.id);
-                        } else {
-                          const newTracking = await storage.createFollowerTracking({
-                            instagramAccountId: account.id,
-                            followerInstagramId: senderId,
-                            isFollowing: true,
-                            welcomeMessageSent: true,
-                            welcomeMessageSentAt: new Date(),
-                            firstFollowedAt: new Date(),
-                            lastFollowedAt: new Date()
-                          });
-                          await storage.markWelcomeMessageSent(newTracking.id);
-                        }
-                      }
                       
                       const currentStats = automation.stats as any || {};
                       await storage.updateAutomation(automation.id, {
@@ -1269,13 +1239,26 @@ export async function registerRoutes(
                         // Use button-enabled function if any links are marked as buttons
                         const hasButtonLinks = links.some((l: any) => l.isButton);
                         if (hasButtonLinks) {
-                          await sendDirectMessageWithButtons(account.accessToken, senderId, replyMessage, links);
+                          await sendDirectMessageWithButtons({
+                            accessToken: account.accessToken,
+                            recipientId: senderId,
+                            message: replyMessage,
+                            links,
+                            igBusinessAccountId: account.igBusinessAccountId || undefined,
+                            pageAccessToken: account.pageAccessToken || undefined
+                          });
                         } else {
                           let fullMessage = replyMessage;
                           if (links.length > 0) {
                             fullMessage += formatLinksAsButtons(links);
                           }
-                          await sendDirectMessage(account.accessToken, senderId, fullMessage);
+                          await sendDirectMessage({
+                            accessToken: account.accessToken,
+                            recipientId: senderId,
+                            message: fullMessage,
+                            igBusinessAccountId: account.igBusinessAccountId || undefined,
+                            pageAccessToken: account.pageAccessToken || undefined
+                          });
                         }
                         console.log("Story reaction reply sent to", senderId);
                         
@@ -1315,114 +1298,78 @@ export async function registerRoutes(
   });
 
   // ========================================
-  // SCHEDULED MESSAGE PROCESSOR
+  // AUTOMATIC TOKEN REFRESH
   // ========================================
   
-  // Process scheduled messages every minute
-  setInterval(async () => {
+  // Refresh tokens that are close to expiring (within 10 days of 60-day expiration)
+  // This runs every 6 hours to ensure tokens stay fresh
+  const TOKEN_REFRESH_THRESHOLD_DAYS = 10;
+  const TOKEN_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+  
+  async function refreshExpiringTokens() {
     try {
-      const pendingMessages = await storage.getPendingScheduledMessages();
+      console.log("[Token Refresh] Checking for tokens that need refreshing...");
+      const accounts = await storage.getAllActiveInstagramAccounts();
       
-      for (const msg of pendingMessages) {
+      for (const account of accounts) {
         try {
-          const account = await storage.getInstagramAccount(msg.instagramAccountId);
-          if (!account) {
-            await storage.markScheduledMessageFailed(msg.id, "Instagram account not found");
-            continue;
-          }
+          // Calculate when the token expires using dedicated tokenRefreshedAt field
+          const tokenRefreshDate = account.tokenRefreshedAt || account.createdAt;
+          const tokenAgeMs = Date.now() - new Date(tokenRefreshDate).getTime();
+          const tokenAgeDays = tokenAgeMs / (1000 * 60 * 60 * 24);
+          const expiresInDays = (account.expiresIn || 5184000) / (60 * 60 * 24); // Default 60 days
+          const daysUntilExpiry = expiresInDays - tokenAgeDays;
           
-          // Handle pending username resolution
-          let recipientId = msg.recipientInstagramId;
-          if (recipientId.startsWith('pending:')) {
-            const pendingUsername = recipientId.replace('pending:', '');
-            console.log(`Attempting to resolve pending username: @${pendingUsername}`);
+          console.log(`[Token Refresh] Account @${account.username}: Token age ${tokenAgeDays.toFixed(1)} days, expires in ${daysUntilExpiry.toFixed(1)} days`);
+          
+          // Refresh if token expires within threshold
+          if (daysUntilExpiry <= TOKEN_REFRESH_THRESHOLD_DAYS && daysUntilExpiry > 0) {
+            console.log(`[Token Refresh] Refreshing token for @${account.username}...`);
             
-            // Try to resolve from follower tracking first
-            const follower = await storage.getFollowerByUsername(account.id, pendingUsername);
-            if (follower && follower.followerInstagramId) {
-              recipientId = follower.followerInstagramId;
-              console.log(`Resolved @${pendingUsername} to ID: ${recipientId} (from followers)`);
-              // Update the message with resolved ID for future reference
-              await storage.updateScheduledMessage(msg.id, { recipientInstagramId: recipientId });
-            } else {
-              // Try following list if not found in followers
-              const following = await storage.getFollowingByUsername(account.id, pendingUsername);
-              if (following && following.followingInstagramId) {
-                recipientId = following.followingInstagramId;
-                console.log(`Resolved @${pendingUsername} to ID: ${recipientId} (from following)`);
-                // Update the message with resolved ID for future reference
-                await storage.updateScheduledMessage(msg.id, { recipientInstagramId: recipientId });
-              } else {
-                await storage.markScheduledMessageFailed(
-                  msg.id, 
-                  `Cannot send DM: User @${pendingUsername} is not in your followers or following list.`
-                );
-                continue;
-              }
-            }
-          }
-          
-          console.log(`Processing scheduled message to ${recipientId}`);
-          
-          // Use button-enabled function if any links are marked as buttons
-          const links = msg.links as any[] || [];
-          const hasButtonLinks = links.some((l: any) => l.isButton);
-          
-          if (hasButtonLinks) {
-            await sendDirectMessageWithButtons(
-              account.accessToken,
-              recipientId,
-              msg.message,
-              links
-            );
-          } else {
-            let fullMessage = msg.message;
-            if (links.length > 0) {
-              fullMessage += "\n\n";
-              for (const link of links) {
-                if (link.label) {
-                  fullMessage += `${link.label}\n${link.url}\n\n`;
-                } else {
-                  fullMessage += `${link.url}\n\n`;
+            try {
+              const refreshedToken = await refreshLongLivedToken(account.accessToken);
+              await storage.updateInstagramAccountToken(
+                account.id,
+                refreshedToken.access_token,
+                refreshedToken.expires_in || 5184000
+              );
+              console.log(`[Token Refresh] Successfully refreshed token for @${account.username}, new expiry: ${(refreshedToken.expires_in / 86400).toFixed(0)} days`);
+            } catch (refreshError: any) {
+              console.error(`[Token Refresh] Failed to refresh token for @${account.username}:`, refreshError?.message);
+              
+              // If refresh fails, try Facebook token refresh as fallback
+              if (account.pageAccessToken) {
+                try {
+                  console.log(`[Token Refresh] Trying Facebook token refresh for @${account.username}...`);
+                  const fbRefreshed = await getFacebookLongLivedToken(account.pageAccessToken);
+                  await storage.updateInstagramAccountToken(
+                    account.id,
+                    fbRefreshed.access_token,
+                    fbRefreshed.expires_in || 5184000
+                  );
+                  console.log(`[Token Refresh] Successfully refreshed via Facebook for @${account.username}`);
+                } catch (fbError: any) {
+                  console.error(`[Token Refresh] Facebook refresh also failed for @${account.username}:`, fbError?.message);
                 }
               }
             }
-            await sendDirectMessage(account.accessToken, recipientId, fullMessage.trim());
+          } else if (daysUntilExpiry <= 0) {
+            console.log(`[Token Refresh] Token for @${account.username} has already expired. User needs to reconnect.`);
           }
-          
-          await storage.markScheduledMessageProcessed(msg.id);
-          
-          // Log activity
-          await storage.createActivityLog({
-            userId: msg.userId,
-            action: "scheduled_dm_sent",
-            targetUsername: msg.recipientUsername || recipientId,
-            details: msg.note || `Scheduled message sent: "${msg.message.substring(0, 50)}..."`,
-          });
-          
-          console.log(`Scheduled message sent successfully to ${recipientId}`);
         } catch (err: any) {
-          console.error(`Failed to send scheduled message ${msg.id}:`, err?.message);
-          
-          // Parse Instagram API error for more helpful message
-          const errorData = err?.response?.data?.error;
-          let errorMessage = err?.message || "Unknown error";
-          
-          if (errorData?.code === 100 && errorData?.error_subcode === 2534014) {
-            errorMessage = `User not found: The recipient (@${msg.recipientUsername || msg.recipientInstagramId}) must have messaged your Instagram account before you can send them a DM.`;
-          } else if (errorData?.code === 100) {
-            errorMessage = `Instagram API error: ${errorData?.message || 'Invalid request. The recipient may not be reachable.'}`;
-          } else if (errorData?.message) {
-            errorMessage = `Instagram error: ${errorData.message}`;
-          }
-          
-          await storage.markScheduledMessageFailed(msg.id, errorMessage);
+          console.error(`[Token Refresh] Error processing account ${account.id}:`, err?.message);
         }
       }
+      
+      console.log("[Token Refresh] Token refresh check completed.");
     } catch (err: any) {
-      console.error("Error processing scheduled messages:", err?.message);
+      console.error("[Token Refresh] Error during token refresh:", err?.message);
     }
-  }, 60000); // Check every minute
+  }
+  
+  // Run token refresh on startup and every 6 hours
+  setTimeout(refreshExpiringTokens, 30000); // Initial check 30 seconds after startup
+  setInterval(refreshExpiringTokens, TOKEN_REFRESH_INTERVAL);
 
   return httpServer;
 }
