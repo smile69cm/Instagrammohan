@@ -4,6 +4,32 @@ import { storage } from "./storage";
 import { clerk, protectedRoute } from "./lib/clerk";
 import { generateContent, generateAutoReply } from "./lib/openai";
 import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage } from "./lib/instagram";
+
+function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
+  let result = template;
+  for (const [key, value] of Object.entries(variables)) {
+    result = result.replace(new RegExp(`\\{${key}\\}`, 'gi'), value || '');
+  }
+  return result;
+}
+
+function formatLinksAsButtons(links: Array<{ label?: string; url: string; isButton?: boolean }>): string {
+  if (!links || links.length === 0) return '';
+  
+  let formatted = '\n\n';
+  for (const link of links) {
+    if (link.label) {
+      formatted += `🔗 ${link.label}\n👉 ${link.url}\n\n`;
+    } else {
+      formatted += `👉 ${link.url}\n\n`;
+    }
+  }
+  return formatted.trim();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 import { insertAutomationSchema, insertGeneratedContentSchema, insertActivityLogSchema } from "@shared/schema";
 import { z } from "zod";
 import "./types";
@@ -709,19 +735,23 @@ export async function registerRoutes(
                 if (matchedKeyword) {
                   console.log(`Keyword "${matchedKeyword}" matched in comment`);
                   
-                  // Build the full DM message with links
-                  let fullMessage = messageTemplate;
+                  const commenterUsername = commentData.from?.username || "friend";
+                  const followersOnly = config?.followersOnly || false;
+                  const fallbackCommentMessage = config?.fallbackCommentMessage || "";
+                  const delaySeconds = config?.delaySeconds || 0;
                   const links = config?.links || [];
                   
+                  // Replace template variables
+                  const templateVars = {
+                    username: commenterUsername,
+                    keyword: matchedKeyword,
+                  };
+                  
+                  let processedMessage = replaceTemplateVariables(messageTemplate, templateVars);
+                  
+                  // Format links as prominent buttons
                   if (links.length > 0) {
-                    fullMessage += "\n\n";
-                    for (const link of links) {
-                      if (link.label) {
-                        fullMessage += `${link.label}: ${link.url}\n`;
-                      } else {
-                        fullMessage += `${link.url}\n`;
-                      }
-                    }
+                    processedMessage += formatLinksAsButtons(links);
                   }
                   
                   // Add to queue for reliable processing
@@ -738,48 +768,68 @@ export async function registerRoutes(
                         messageType: "comment_to_dm",
                       },
                       status: "pending",
-                      scheduledFor: new Date(),
+                      scheduledFor: new Date(Date.now() + (delaySeconds * 1000)),
                     });
                     console.log(`Added comment automation to queue for ${commentData.from?.username}`);
                   } catch (queueError: any) {
-                    console.error("Failed to add to queue, processing immediately:", queueError?.message);
+                    console.log("Queue not available, processing immediately");
                   }
                   
-                  // Process immediately as well for real-time response
+                  // Apply delay if configured
+                  if (delaySeconds > 0) {
+                    console.log(`Waiting ${delaySeconds} seconds before sending...`);
+                    await delay(delaySeconds * 1000);
+                  }
+                  
+                  // Process immediately
                   try {
                     const accessToken = account.accessToken;
                     const igBusinessId = account.igBusinessAccountId || igUserId;
                     
                     if (!accessToken) {
-                      console.error("Missing access token for account:", account.id);
                       throw new Error("Account access token is missing");
                     }
                     
-                    console.log("Using account access token for sending reply");
-                    console.log("Full DM message with links:", fullMessage);
+                    // If followers only is enabled, we'll try to send DM first
+                    // If it fails (user doesn't follow), we'll reply with fallback comment
+                    let dmSent = false;
+                    let dmError: any = null;
                     
-                    // Send private reply via DM with links included
-                    await sendPrivateReply(
-                      accessToken,
-                      igBusinessId,
-                      commentData.id,
-                      fullMessage
-                    );
+                    try {
+                      console.log("Sending DM to commenter:", commenterUsername);
+                      await sendPrivateReply(
+                        accessToken,
+                        igBusinessId,
+                        commentData.id,
+                        processedMessage
+                      );
+                      dmSent = true;
+                      console.log("DM sent successfully to", commenterUsername);
+                    } catch (dmErr: any) {
+                      dmError = dmErr;
+                      console.log("DM could not be sent:", dmErr?.response?.data?.error?.message || dmErr?.message);
+                    }
                     
-                    console.log("Private reply sent successfully");
-                    
-                    // Send public comment reply if enabled
-                    if (config?.commentReplyEnabled && config?.commentReplyTemplate) {
-                      console.log("Comment reply is enabled, posting public reply");
+                    // If followers only mode and DM failed, post fallback comment
+                    if (!dmSent && followersOnly && fallbackCommentMessage) {
+                      const processedFallback = replaceTemplateVariables(fallbackCommentMessage, templateVars);
+                      console.log("Posting fallback comment for non-follower");
                       try {
-                        await replyToComment(
-                          accessToken,
-                          commentData.id,
-                          config.commentReplyTemplate
-                        );
-                        console.log("Public comment reply sent successfully");
+                        await replyToComment(accessToken, commentData.id, processedFallback);
+                        console.log("Fallback comment posted successfully");
+                      } catch (fallbackErr: any) {
+                        console.log("Fallback comment failed:", fallbackErr?.message);
+                      }
+                    }
+                    
+                    // Send public comment reply if enabled (regardless of DM status)
+                    if (config?.commentReplyEnabled && config?.commentReplyTemplate) {
+                      const processedCommentReply = replaceTemplateVariables(config.commentReplyTemplate, templateVars);
+                      try {
+                        await replyToComment(accessToken, commentData.id, processedCommentReply);
+                        console.log("Public comment reply sent");
                       } catch (commentReplyError: any) {
-                        console.error("Failed to send public comment reply:", commentReplyError?.message);
+                        console.log("Comment reply failed:", commentReplyError?.message);
                       }
                     }
 
@@ -797,13 +847,14 @@ export async function registerRoutes(
                     await storage.createActivityLog({
                       userId: account.userId,
                       automationId: automation.id,
-                      action: "dm_sent",
-                      targetUsername: commentData.from?.username || "unknown",
-                      details: `Sent DM for keyword "${matchedKeyword}" on comment`,
+                      action: dmSent ? "dm_sent" : "comment_reply_sent",
+                      targetUsername: commenterUsername,
+                      details: dmSent 
+                        ? `Sent DM for keyword "${matchedKeyword}"` 
+                        : `Posted comment reply for "${matchedKeyword}" (user not following)`,
                     });
                   } catch (sendError: any) {
-                    console.error("Failed to send private reply:", sendError?.message);
-                    // The queue will retry this later if it fails
+                    console.log("Automation processing error:", sendError?.message);
                   }
                 }
               }
@@ -845,52 +896,50 @@ export async function registerRoutes(
 
                 for (const automation of activeDmAutomations) {
                   const config = automation.config as any;
-                  // Support both keywords and triggerWords for backwards compatibility
                   const triggerWords = config?.keywords || config?.triggerWords || [];
                   const messageTemplate = config?.messageTemplate || "";
                   const links = config?.links || [];
+                  const delaySeconds = config?.delaySeconds || 0;
                   
-                  // For welcome_message type, always respond (no keyword matching needed)
                   const isWelcomeMessage = automation.type === "welcome_message";
 
-                  // Check if message contains trigger words
-                  // Welcome messages respond to all DMs, auto_dm_reply needs keyword match (unless no keywords defined)
                   const messageTextLower = messageText.toLowerCase();
-                  const keywordMatch = triggerWords.length === 0 || 
-                    triggerWords.some((tw: string) => messageTextLower.includes(tw.toLowerCase()));
+                  const matchedKeyword = triggerWords.find((tw: string) => messageTextLower.includes(tw.toLowerCase()));
+                  const keywordMatch = triggerWords.length === 0 || matchedKeyword;
                   
                   const shouldRespond = isWelcomeMessage || keywordMatch;
 
                   if (shouldRespond && messageTemplate) {
                     console.log(`${automation.type} triggered for automation:`, automation.title);
                     
+                    // Apply delay if configured
+                    if (delaySeconds > 0) {
+                      console.log(`Waiting ${delaySeconds} seconds before sending...`);
+                      await delay(delaySeconds * 1000);
+                    }
+                    
                     try {
-                      // Build the full DM message with links (no AI - use user-entered message)
-                      let replyMessage = messageTemplate;
+                      const templateVars = {
+                        username: senderId,
+                        keyword: matchedKeyword || '',
+                      };
+                      
+                      let replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
                       
                       if (links.length > 0) {
-                        replyMessage += "\n\n";
-                        for (const link of links) {
-                          if (link.label) {
-                            replyMessage += `${link.label}: ${link.url}\n`;
-                          } else {
-                            replyMessage += `${link.url}\n`;
-                          }
-                        }
+                        replyMessage += formatLinksAsButtons(links);
                       }
                       
-                      console.log("Sending DM reply:", replyMessage);
+                      console.log("Sending DM reply");
                       
-                      // Send DM reply using Instagram API
                       await sendDirectMessage(
                         account.accessToken,
                         senderId,
                         replyMessage
                       );
                       
-                      console.log("DM reply sent successfully");
+                      console.log("DM reply sent successfully to", senderId);
                       
-                      // Update automation stats
                       const currentStats = automation.stats as any || {};
                       await storage.updateAutomation(automation.id, {
                         stats: {
@@ -900,7 +949,6 @@ export async function registerRoutes(
                         }
                       });
                       
-                      // Log activity
                       await storage.createActivityLog({
                         userId: account.userId,
                         automationId: automation.id,
@@ -909,7 +957,67 @@ export async function registerRoutes(
                         details: `Auto-replied to DM: "${messageText.substring(0, 50)}..."`,
                       });
                     } catch (replyError: any) {
-                      console.error("Failed to send auto-reply:", replyError?.message);
+                      console.log("DM reply could not be sent:", replyError?.response?.data?.error?.message || replyError?.message);
+                    }
+                  }
+                }
+              }
+              
+              // Handle story reactions
+              const storyReaction = messageEvent.reaction;
+              if (senderId && storyReaction) {
+                console.log(`Story reaction from ${senderId}:`, storyReaction);
+                
+                const account = await storage.getInstagramAccountByBusinessId(igUserId);
+                if (account) {
+                  const automations = await storage.getAutomationsByInstagramAccountId(account.id);
+                  const storyAutomations = automations.filter(
+                    (a: any) => a.isActive && a.type === "story_reaction"
+                  );
+                  
+                  for (const automation of storyAutomations) {
+                    const config = automation.config as any;
+                    const messageTemplate = config?.messageTemplate || "";
+                    const links = config?.links || [];
+                    const delaySeconds = config?.delaySeconds || 0;
+                    
+                    if (messageTemplate) {
+                      console.log("Story reaction automation triggered:", automation.title);
+                      
+                      if (delaySeconds > 0) {
+                        await delay(delaySeconds * 1000);
+                      }
+                      
+                      try {
+                        const templateVars = { username: senderId };
+                        let replyMessage = replaceTemplateVariables(messageTemplate, templateVars);
+                        
+                        if (links.length > 0) {
+                          replyMessage += formatLinksAsButtons(links);
+                        }
+                        
+                        await sendDirectMessage(account.accessToken, senderId, replyMessage);
+                        console.log("Story reaction reply sent to", senderId);
+                        
+                        const currentStats = automation.stats as any || {};
+                        await storage.updateAutomation(automation.id, {
+                          stats: {
+                            ...currentStats,
+                            totalReplies: (currentStats.totalReplies || 0) + 1,
+                            lastTriggered: new Date().toISOString(),
+                          }
+                        });
+                        
+                        await storage.createActivityLog({
+                          userId: account.userId,
+                          automationId: automation.id,
+                          action: "story_reaction_reply",
+                          targetUsername: senderId,
+                          details: `Replied to story reaction`,
+                        });
+                      } catch (err: any) {
+                        console.log("Story reaction reply failed:", err?.message);
+                      }
                     }
                   }
                 }
