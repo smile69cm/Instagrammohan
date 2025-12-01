@@ -185,14 +185,51 @@ export async function refreshLongLivedToken(currentToken: string) {
   }
 }
 
-export async function sendDirectMessage(accessToken: string, recipientId: string, message: string) {
+export interface DMButton {
+  type: "web_url";
+  url: string;
+  title: string;
+}
+
+export interface DMLink {
+  label?: string;
+  url: string;
+  isButton?: boolean;
+}
+
+export async function sendDirectMessage(accessToken: string, recipientId: string, message: string, buttons?: DMButton[]) {
   try {
     console.log("Sending Instagram DM to:", recipientId);
     console.log("Message:", message);
+    console.log("Buttons:", buttons);
+    
+    let messagePayload: any;
+    
+    if (buttons && buttons.length > 0) {
+      messagePayload = {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "generic",
+            elements: [{
+              title: message.substring(0, 80),
+              subtitle: message.length > 80 ? message.substring(80, 160) : undefined,
+              buttons: buttons.slice(0, 3).map(btn => ({
+                type: "web_url",
+                url: btn.url,
+                title: btn.title.substring(0, 20)
+              }))
+            }]
+          }
+        }
+      };
+    } else {
+      messagePayload = { text: message };
+    }
     
     const response = await axios.post(`${INSTAGRAM_GRAPH_URL}/me/messages`, {
-      recipient: JSON.stringify({ id: recipientId }),
-      message: JSON.stringify({ text: message })
+      recipient: { id: recipientId },
+      message: messagePayload
     }, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -207,7 +244,65 @@ export async function sendDirectMessage(accessToken: string, recipientId: string
     console.error("Error sending DM:", errorData || error?.message);
     console.error("Status:", error?.response?.status);
     console.error("Recipient ID:", recipientId);
+    
+    if (buttons && buttons.length > 0) {
+      console.log("Retrying without buttons (text only)...");
+      try {
+        const textOnlyResponse = await axios.post(`${INSTAGRAM_GRAPH_URL}/me/messages`, {
+          recipient: { id: recipientId },
+          message: { text: message }
+        }, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          }
+        });
+        console.log("Text-only DM sent successfully:", textOnlyResponse.data);
+        return textOnlyResponse.data;
+      } catch (textError: any) {
+        console.error("Text-only fallback also failed:", textError?.response?.data?.error || textError?.message);
+      }
+    }
+    
     throw error;
+  }
+}
+
+export async function sendDirectMessageWithButtons(
+  accessToken: string, 
+  recipientId: string, 
+  message: string, 
+  links?: DMLink[]
+) {
+  const buttons: DMButton[] = [];
+  
+  if (links && links.length > 0) {
+    for (const link of links) {
+      if (link.isButton) {
+        buttons.push({
+          type: "web_url",
+          url: link.url,
+          title: link.label || "Open link"
+        });
+      }
+    }
+  }
+  
+  if (buttons.length > 0) {
+    return sendDirectMessage(accessToken, recipientId, message, buttons);
+  } else {
+    let fullMessage = message;
+    if (links && links.length > 0) {
+      fullMessage += "\n\n";
+      for (const link of links) {
+        if (link.label) {
+          fullMessage += `${link.label}\n${link.url}\n\n`;
+        } else {
+          fullMessage += `${link.url}\n\n`;
+        }
+      }
+    }
+    return sendDirectMessage(accessToken, recipientId, fullMessage.trim());
   }
 }
 
