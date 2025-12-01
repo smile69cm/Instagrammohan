@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { clerk, protectedRoute } from "./lib/clerk";
 import { generateContent, generateAutoReply } from "./lib/openai";
-import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount } from "./lib/instagram";
+import { exchangeCodeForToken, getInstagramUserInfo, getLongLivedToken, refreshLongLivedToken, getInstagramCallbackUrl, getUserMedia, sendPrivateReply, getCommentDetails, getFacebookCallbackUrl, exchangeFacebookCodeForToken, getFacebookLongLivedToken, getFacebookPages, getInstagramBusinessAccount, replyToComment, sendDirectMessage } from "./lib/instagram";
 import { insertAutomationSchema, insertGeneratedContentSchema, insertActivityLogSchema } from "@shared/schema";
 import { z } from "zod";
 import "./types";
@@ -709,6 +709,21 @@ export async function registerRoutes(
                 if (matchedKeyword) {
                   console.log(`Keyword "${matchedKeyword}" matched in comment`);
                   
+                  // Build the full DM message with links
+                  let fullMessage = messageTemplate;
+                  const links = config?.links || [];
+                  
+                  if (links.length > 0) {
+                    fullMessage += "\n\n";
+                    for (const link of links) {
+                      if (link.label) {
+                        fullMessage += `${link.label}: ${link.url}\n`;
+                      } else {
+                        fullMessage += `${link.url}\n`;
+                      }
+                    }
+                  }
+                  
                   // Add to queue for reliable processing
                   try {
                     await storage.addToQueue({
@@ -741,21 +756,31 @@ export async function registerRoutes(
                     }
                     
                     console.log("Using account access token for sending reply");
+                    console.log("Full DM message with links:", fullMessage);
                     
-                    // Send private reply via DM
+                    // Send private reply via DM with links included
                     await sendPrivateReply(
                       accessToken,
                       igBusinessId,
                       commentData.id,
-                      messageTemplate
+                      fullMessage
                     );
                     
                     console.log("Private reply sent successfully");
                     
                     // Send public comment reply if enabled
                     if (config?.commentReplyEnabled && config?.commentReplyTemplate) {
-                      console.log("Comment reply is enabled, would post public reply");
-                      // TODO: Implement public comment reply when API is available
+                      console.log("Comment reply is enabled, posting public reply");
+                      try {
+                        await replyToComment(
+                          accessToken,
+                          commentData.id,
+                          config.commentReplyTemplate
+                        );
+                        console.log("Public comment reply sent successfully");
+                      } catch (commentReplyError: any) {
+                        console.error("Failed to send public comment reply:", commentReplyError?.message);
+                      }
                     }
 
                     // Update automation stats
@@ -822,7 +847,8 @@ export async function registerRoutes(
                   const config = automation.config as any;
                   // Support both keywords and triggerWords for backwards compatibility
                   const triggerWords = config?.keywords || config?.triggerWords || [];
-                  const prompt = config?.prompt || "";
+                  const messageTemplate = config?.messageTemplate || "";
+                  const links = config?.links || [];
                   
                   // For welcome_message type, always respond (no keyword matching needed)
                   const isWelcomeMessage = automation.type === "welcome_message";
@@ -835,15 +861,44 @@ export async function registerRoutes(
                   
                   const shouldRespond = isWelcomeMessage || keywordMatch;
 
-                  if (shouldRespond) {
+                  if (shouldRespond && messageTemplate) {
                     console.log(`${automation.type} triggered for automation:`, automation.title);
                     
                     try {
-                      // Generate AI response
-                      const aiResponse = await generateAutoReply({ message: messageText, customPrompt: prompt });
+                      // Build the full DM message with links (no AI - use user-entered message)
+                      let replyMessage = messageTemplate;
                       
-                      // TODO: Send DM reply using Instagram API
-                      console.log("Generated AI response:", aiResponse);
+                      if (links.length > 0) {
+                        replyMessage += "\n\n";
+                        for (const link of links) {
+                          if (link.label) {
+                            replyMessage += `${link.label}: ${link.url}\n`;
+                          } else {
+                            replyMessage += `${link.url}\n`;
+                          }
+                        }
+                      }
+                      
+                      console.log("Sending DM reply:", replyMessage);
+                      
+                      // Send DM reply using Instagram API
+                      await sendDirectMessage(
+                        account.accessToken,
+                        senderId,
+                        replyMessage
+                      );
+                      
+                      console.log("DM reply sent successfully");
+                      
+                      // Update automation stats
+                      const currentStats = automation.stats as any || {};
+                      await storage.updateAutomation(automation.id, {
+                        stats: {
+                          ...currentStats,
+                          totalReplies: (currentStats.totalReplies || 0) + 1,
+                          lastTriggered: new Date().toISOString(),
+                        }
+                      });
                       
                       // Log activity
                       await storage.createActivityLog({
@@ -854,7 +909,7 @@ export async function registerRoutes(
                         details: `Auto-replied to DM: "${messageText.substring(0, 50)}..."`,
                       });
                     } catch (replyError: any) {
-                      console.error("Failed to generate auto-reply:", replyError?.message);
+                      console.error("Failed to send auto-reply:", replyError?.message);
                     }
                   }
                 }
