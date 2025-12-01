@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, KeyboardEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   MessageSquare, 
@@ -9,7 +9,9 @@ import {
   AtSign,
   Image,
   Pencil,
-  Trash2
+  Trash2,
+  X,
+  Link as LinkIcon
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -93,6 +95,8 @@ export default function Automations() {
   const [deleteAutomation, setDeleteAutomation] = useState<any>(null);
   const [media, setMedia] = useState<any[]>([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
+  const [keywordInput, setKeywordInput] = useState("");
+  const [linkInput, setLinkInput] = useState({ label: "", url: "" });
   const [formData, setFormData] = useState({
     type: "comment_to_dm",
     title: "",
@@ -100,9 +104,12 @@ export default function Automations() {
     instagramAccountId: "",
     mediaId: "",
     mediaPermalink: "",
-    keywords: "",
+    keywords: [] as string[],
     messageTemplate: "",
     prompt: "",
+    links: [] as { label?: string; url: string }[],
+    commentReplyEnabled: false,
+    commentReplyTemplate: "",
   });
 
   const { data: automations = [], isLoading } = useQuery({
@@ -203,10 +210,15 @@ export default function Automations() {
       instagramAccountId: "",
       mediaId: "",
       mediaPermalink: "",
-      keywords: "",
+      keywords: [],
       messageTemplate: "",
       prompt: "",
+      links: [],
+      commentReplyEnabled: false,
+      commentReplyTemplate: "",
     });
+    setKeywordInput("");
+    setLinkInput({ label: "", url: "" });
     setMedia([]);
   };
 
@@ -224,10 +236,10 @@ export default function Automations() {
       return;
     }
 
-    if (formData.type === "comment_to_dm" && (!formData.keywords || !formData.messageTemplate)) {
+    if (formData.type === "comment_to_dm" && (formData.keywords.length === 0 || !formData.messageTemplate)) {
       toast({
         title: "Missing fields",
-        description: "Please enter keywords and a message template",
+        description: "Please enter at least one keyword and a message template",
         variant: "destructive",
       });
       return;
@@ -240,10 +252,13 @@ export default function Automations() {
       instagramAccountId: formData.instagramAccountId,
       config: {
         prompt: formData.prompt,
-        keywords: formData.keywords ? formData.keywords.split(",").map(w => w.trim().toLowerCase()) : [],
+        keywords: formData.keywords,
         mediaId: formData.mediaId,
         mediaPermalink: formData.mediaPermalink,
         messageTemplate: formData.messageTemplate,
+        links: formData.links,
+        commentReplyEnabled: formData.commentReplyEnabled,
+        commentReplyTemplate: formData.commentReplyTemplate,
       },
     };
 
@@ -270,11 +285,54 @@ export default function Automations() {
       instagramAccountId: automation.instagramAccountId,
       mediaId: config.mediaId || "",
       mediaPermalink: config.mediaPermalink || "",
-      keywords: config.keywords ? config.keywords.join(", ") : "",
+      keywords: config.keywords || [],
       messageTemplate: config.messageTemplate || "",
       prompt: config.prompt || "",
+      links: config.links || [],
+      commentReplyEnabled: config.commentReplyEnabled || false,
+      commentReplyTemplate: config.commentReplyTemplate || "",
     });
+    setKeywordInput("");
+    setLinkInput({ label: "", url: "" });
     setIsDialogOpen(true);
+  };
+
+  const handleKeywordKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && keywordInput.trim()) {
+      e.preventDefault();
+      const keyword = keywordInput.trim().toLowerCase();
+      if (!formData.keywords.includes(keyword)) {
+        setFormData(prev => ({
+          ...prev,
+          keywords: [...prev.keywords, keyword]
+        }));
+      }
+      setKeywordInput("");
+    }
+  };
+
+  const removeKeyword = (keywordToRemove: string) => {
+    setFormData(prev => ({
+      ...prev,
+      keywords: prev.keywords.filter(k => k !== keywordToRemove)
+    }));
+  };
+
+  const addLink = () => {
+    if (linkInput.url.trim()) {
+      setFormData(prev => ({
+        ...prev,
+        links: [...prev.links, { label: linkInput.label.trim() || undefined, url: linkInput.url.trim() }]
+      }));
+      setLinkInput({ label: "", url: "" });
+    }
+  };
+
+  const removeLink = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      links: prev.links.filter((_, i) => i !== index)
+    }));
   };
 
   const handleDelete = (automation: any) => {
@@ -566,12 +624,33 @@ export default function Automations() {
                 </div>
 
                 <div className="grid gap-2">
-                  <Label htmlFor="keywords">Trigger Keywords * (comma-separated)</Label>
+                  <Label htmlFor="keywords">Trigger Keywords *</Label>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {formData.keywords.map((keyword, index) => (
+                      <Badge 
+                        key={index} 
+                        variant="secondary" 
+                        className="px-3 py-1 flex items-center gap-1"
+                        data-testid={`keyword-chip-${index}`}
+                      >
+                        {keyword}
+                        <button
+                          type="button"
+                          onClick={() => removeKeyword(keyword)}
+                          className="ml-1 hover:text-red-500 transition-colors"
+                          data-testid={`remove-keyword-${index}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
                   <Input
                     id="keywords"
-                    placeholder="e.g., link, guide, free, send"
-                    value={formData.keywords}
-                    onChange={(e) => setFormData(prev => ({ ...prev, keywords: e.target.value }))}
+                    placeholder="Type a keyword and press Enter"
+                    value={keywordInput}
+                    onChange={(e) => setKeywordInput(e.target.value)}
+                    onKeyDown={handleKeywordKeyDown}
                     data-testid="input-keywords"
                   />
                   <p className="text-xs text-muted-foreground">
@@ -583,7 +662,7 @@ export default function Automations() {
                   <Label htmlFor="messageTemplate">DM Message Template *</Label>
                   <Textarea
                     id="messageTemplate"
-                    placeholder="e.g., Hey! Here's your free guide: https://example.com/guide"
+                    placeholder="e.g., Hey! Thanks for your interest. Here's the link you requested."
                     value={formData.messageTemplate}
                     onChange={(e) => setFormData(prev => ({ ...prev, messageTemplate: e.target.value }))}
                     data-testid="input-message-template"
@@ -592,6 +671,96 @@ export default function Automations() {
                   <p className="text-xs text-muted-foreground">
                     This message will be sent as a DM to commenters
                   </p>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label>Links (Optional)</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Add links to include in your DM message
+                  </p>
+                  {formData.links.length > 0 && (
+                    <div className="space-y-2 mb-2">
+                      {formData.links.map((link, index) => (
+                        <div 
+                          key={index} 
+                          className="flex items-center gap-2 p-2 bg-muted rounded-lg"
+                          data-testid={`link-item-${index}`}
+                        >
+                          <LinkIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            {link.label && (
+                              <p className="text-sm font-medium truncate">{link.label}</p>
+                            )}
+                            <p className="text-xs text-muted-foreground truncate">{link.url}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeLink(index)}
+                            className="text-muted-foreground hover:text-red-500 transition-colors"
+                            data-testid={`remove-link-${index}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Label (optional)"
+                      value={linkInput.label}
+                      onChange={(e) => setLinkInput(prev => ({ ...prev, label: e.target.value }))}
+                      className="flex-1"
+                      data-testid="input-link-label"
+                    />
+                    <Input
+                      placeholder="https://..."
+                      value={linkInput.url}
+                      onChange={(e) => setLinkInput(prev => ({ ...prev, url: e.target.value }))}
+                      className="flex-1"
+                      data-testid="input-link-url"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addLink}
+                      disabled={!linkInput.url.trim()}
+                      data-testid="button-add-link"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-2 p-4 border rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label htmlFor="commentReply">Reply to Comments</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Also post a public reply to the comment
+                      </p>
+                    </div>
+                    <Switch
+                      id="commentReply"
+                      checked={formData.commentReplyEnabled}
+                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, commentReplyEnabled: checked }))}
+                      data-testid="switch-comment-reply"
+                    />
+                  </div>
+                  {formData.commentReplyEnabled && (
+                    <div className="mt-2">
+                      <Input
+                        placeholder="e.g., Check your inbox! 📩"
+                        value={formData.commentReplyTemplate}
+                        onChange={(e) => setFormData(prev => ({ ...prev, commentReplyTemplate: e.target.value }))}
+                        data-testid="input-comment-reply-template"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This reply will be posted publicly to the comment
+                      </p>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -610,12 +779,33 @@ export default function Automations() {
                 </div>
 
                 <div className="grid gap-2">
-                  <Label htmlFor="triggerWords">Trigger Words (comma-separated)</Label>
+                  <Label htmlFor="triggerWords">Trigger Words</Label>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {formData.keywords.map((keyword, index) => (
+                      <Badge 
+                        key={index} 
+                        variant="secondary" 
+                        className="px-3 py-1 flex items-center gap-1"
+                        data-testid={`trigger-chip-${index}`}
+                      >
+                        {keyword}
+                        <button
+                          type="button"
+                          onClick={() => removeKeyword(keyword)}
+                          className="ml-1 hover:text-red-500 transition-colors"
+                          data-testid={`remove-trigger-${index}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
                   <Input
                     id="triggerWords"
-                    placeholder="e.g., help, support, question"
-                    value={formData.keywords}
-                    onChange={(e) => setFormData(prev => ({ ...prev, keywords: e.target.value }))}
+                    placeholder="Type a word and press Enter"
+                    value={keywordInput}
+                    onChange={(e) => setKeywordInput(e.target.value)}
+                    onKeyDown={handleKeywordKeyDown}
                     data-testid="input-trigger-words"
                   />
                   <p className="text-xs text-muted-foreground">Leave empty to respond to all messages</p>
