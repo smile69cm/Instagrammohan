@@ -9,6 +9,7 @@ import {
   automationBackups,
   automationQueue,
   followerTracking,
+  followingTracking,
   scheduledMessages,
   type User,
   type InsertUser,
@@ -26,6 +27,8 @@ import {
   type InsertAutomationQueueItem,
   type FollowerTracking,
   type InsertFollowerTracking,
+  type FollowingTracking,
+  type InsertFollowingTracking,
   type ScheduledMessage,
   type InsertScheduledMessage,
 } from "@shared/schema";
@@ -91,6 +94,11 @@ export interface IStorage {
   markWelcomeMessageSent(id: string): Promise<void>;
   getFollowerTrackingByAccountId(instagramAccountId: string): Promise<FollowerTracking[]>;
   canSendWelcomeMessage(instagramAccountId: string, followerInstagramId: string, cooldownDays: number): Promise<boolean>;
+  
+  // Following Tracking
+  getFollowingByUsername(instagramAccountId: string, username: string): Promise<FollowingTracking | undefined>;
+  createFollowingTracking(tracking: InsertFollowingTracking): Promise<FollowingTracking>;
+  updateFollowingTracking(id: string, updates: Partial<FollowingTracking>): Promise<void>;
   
   // Scheduled Messages
   createScheduledMessage(message: InsertScheduledMessage): Promise<ScheduledMessage>;
@@ -449,6 +457,31 @@ export class DatabaseStorage implements IStorage {
     const timeSinceLastMessage = Date.now() - new Date(tracking.welcomeMessageSentAt).getTime();
     
     return timeSinceLastMessage >= cooldownMs;
+  }
+
+  // Following Tracking
+  async getFollowingByUsername(instagramAccountId: string, username: string): Promise<FollowingTracking | undefined> {
+    const cleanUsername = username.toLowerCase().replace('@', '');
+    const [tracking] = await db.select().from(followingTracking)
+      .where(
+        and(
+          eq(followingTracking.instagramAccountId, instagramAccountId),
+          sql`LOWER(${followingTracking.followingUsername}) = ${cleanUsername}`
+        )
+      )
+      .limit(1);
+    return tracking;
+  }
+
+  async createFollowingTracking(tracking: InsertFollowingTracking): Promise<FollowingTracking> {
+    const [created] = await db.insert(followingTracking).values(tracking).returning();
+    return created;
+  }
+
+  async updateFollowingTracking(id: string, updates: Partial<FollowingTracking>): Promise<void> {
+    await db.update(followingTracking)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(followingTracking.id, id));
   }
 
   // Scheduled Messages

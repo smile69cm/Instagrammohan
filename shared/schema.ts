@@ -79,6 +79,19 @@ export const followerTracking = pgTable("follower_tracking", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const followingTracking = pgTable("following_tracking", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  instagramAccountId: varchar("instagram_account_id").notNull().references(() => instagramAccounts.id),
+  followingInstagramId: text("following_instagram_id").notNull(),
+  followingUsername: text("following_username"),
+  isFollowing: boolean("is_following").default(true),
+  firstFollowedAt: timestamp("first_followed_at").defaultNow().notNull(),
+  lastFollowedAt: timestamp("last_followed_at").defaultNow().notNull(),
+  unfollowedAt: timestamp("unfollowed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const scheduledMessages = pgTable("scheduled_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id),
@@ -163,6 +176,7 @@ export const insertActivityLogSchema = createInsertSchema(activityLog).omit({ id
 export const insertAutomationBackupSchema = createInsertSchema(automationBackups).omit({ id: true, createdAt: true });
 export const insertAutomationQueueSchema = createInsertSchema(automationQueue).omit({ id: true, createdAt: true });
 export const insertFollowerTrackingSchema = createInsertSchema(followerTracking).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertFollowingTrackingSchema = createInsertSchema(followingTracking).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScheduledMessageSchema = createInsertSchema(scheduledMessages).omit({ id: true, createdAt: true, updatedAt: true });
 
 // Types
@@ -189,6 +203,9 @@ export type InsertAutomationQueueItem = z.infer<typeof insertAutomationQueueSche
 
 export type FollowerTracking = typeof followerTracking.$inferSelect;
 export type InsertFollowerTracking = z.infer<typeof insertFollowerTrackingSchema>;
+
+export type FollowingTracking = typeof followingTracking.$inferSelect;
+export type InsertFollowingTracking = z.infer<typeof insertFollowingTrackingSchema>;
 
 export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
 export type InsertScheduledMessage = z.infer<typeof insertScheduledMessageSchema>;

@@ -1304,19 +1304,28 @@ export async function registerRoutes(
             const pendingUsername = recipientId.replace('pending:', '');
             console.log(`Attempting to resolve pending username: @${pendingUsername}`);
             
-            // Try to resolve from follower tracking
+            // Try to resolve from follower tracking first
             const follower = await storage.getFollowerByUsername(account.id, pendingUsername);
             if (follower && follower.followerInstagramId) {
               recipientId = follower.followerInstagramId;
-              console.log(`Resolved @${pendingUsername} to ID: ${recipientId}`);
+              console.log(`Resolved @${pendingUsername} to ID: ${recipientId} (from followers)`);
               // Update the message with resolved ID for future reference
               await storage.updateScheduledMessage(msg.id, { recipientInstagramId: recipientId });
             } else {
-              await storage.markScheduledMessageFailed(
-                msg.id, 
-                `Cannot send DM: User @${pendingUsername} has not interacted with your account. They need to message you or comment on your posts first.`
-              );
-              continue;
+              // Try following list if not found in followers
+              const following = await storage.getFollowingByUsername(account.id, pendingUsername);
+              if (following && following.followingInstagramId) {
+                recipientId = following.followingInstagramId;
+                console.log(`Resolved @${pendingUsername} to ID: ${recipientId} (from following)`);
+                // Update the message with resolved ID for future reference
+                await storage.updateScheduledMessage(msg.id, { recipientInstagramId: recipientId });
+              } else {
+                await storage.markScheduledMessageFailed(
+                  msg.id, 
+                  `Cannot send DM: User @${pendingUsername} is not in your followers or following list.`
+                );
+                continue;
+              }
             }
           }
           
