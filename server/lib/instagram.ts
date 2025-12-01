@@ -6,6 +6,71 @@ const INSTAGRAM_TOKEN_URL = process.env.INSTAGRAM_TOKEN_URL || "https://api.inst
 const FACEBOOK_GRAPH_URL = "https://graph.facebook.com/v21.0";
 const INSTAGRAM_GRAPH_URL = "https://graph.instagram.com/v21.0";
 
+export async function lookupInstagramUserId(username: string): Promise<string | null> {
+  const cleanUsername = username.replace('@', '').trim();
+  
+  if (!cleanUsername) {
+    console.log("Empty username provided");
+    return null;
+  }
+  
+  console.log(`Looking up Instagram User ID for: @${cleanUsername}`);
+  
+  try {
+    const url = `https://www.instagram.com/${cleanUsername}/?__a=1&__d=1`;
+    
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive",
+      },
+      timeout: 10000,
+    });
+    
+    const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+    
+    const match = text.match(/"profile_id":"(\d+)"/);
+    
+    if (match && match[1]) {
+      console.log(`Found User ID for @${cleanUsername}: ${match[1]}`);
+      return match[1];
+    }
+    
+    const userIdMatch = text.match(/"user_id":"(\d+)"/);
+    if (userIdMatch && userIdMatch[1]) {
+      console.log(`Found User ID (alt) for @${cleanUsername}: ${userIdMatch[1]}`);
+      return userIdMatch[1];
+    }
+    
+    const pkMatch = text.match(/"pk":"(\d+)"/);
+    if (pkMatch && pkMatch[1]) {
+      console.log(`Found User ID (pk) for @${cleanUsername}: ${pkMatch[1]}`);
+      return pkMatch[1];
+    }
+    
+    const idMatch = text.match(/"id":"(\d+)"/);
+    if (idMatch && idMatch[1]) {
+      console.log(`Found User ID (id) for @${cleanUsername}: ${idMatch[1]}`);
+      return idMatch[1];
+    }
+    
+    console.log(`User ID not found in response for @${cleanUsername}`);
+    return null;
+  } catch (error: any) {
+    console.error(`Error looking up User ID for @${cleanUsername}:`, error?.message);
+    
+    if (error?.response?.status === 404) {
+      console.log(`User @${cleanUsername} not found (404)`);
+    } else if (error?.response?.status === 429) {
+      console.log(`Rate limited when looking up @${cleanUsername}`);
+    }
+    
+    return null;
+  }
+}
+
 export function getFacebookCallbackUrl(req: Request): string {
   if (process.env.NEXT_PUBLIC_HOST_URL) {
     return `${process.env.NEXT_PUBLIC_HOST_URL}/api/facebook/oauth/callback`;
@@ -197,24 +262,60 @@ export interface DMLink {
   isButton?: boolean;
 }
 
-export async function sendDirectMessage(accessToken: string, recipientId: string, message: string, buttons?: DMButton[]) {
+export interface SendDMOptions {
+  accessToken: string;
+  recipientId: string;
+  message: string;
+  buttons?: DMButton[];
+  igBusinessAccountId?: string;
+  pageAccessToken?: string;
+}
+
+export async function sendDirectMessage(
+  accessTokenOrOptions: string | SendDMOptions, 
+  recipientId?: string, 
+  message?: string, 
+  buttons?: DMButton[]
+) {
+  let options: SendDMOptions;
+  
+  if (typeof accessTokenOrOptions === 'string') {
+    options = {
+      accessToken: accessTokenOrOptions,
+      recipientId: recipientId!,
+      message: message!,
+      buttons
+    };
+  } else {
+    options = accessTokenOrOptions;
+  }
+
+  const { accessToken, igBusinessAccountId, pageAccessToken } = options;
+  const finalRecipientId = options.recipientId;
+  const finalMessage = options.message;
+  const finalButtons = options.buttons;
+  
+  const tokenToUse = pageAccessToken || accessToken;
+  
   try {
-    console.log("Sending Instagram DM to:", recipientId);
-    console.log("Message:", message);
-    console.log("Buttons:", buttons);
+    console.log("Sending Instagram DM to:", finalRecipientId);
+    console.log("Message:", finalMessage);
+    console.log("Buttons:", finalButtons);
+    console.log("Using IG Business Account ID:", igBusinessAccountId || "not provided (using /me)");
+    console.log("Using page token:", pageAccessToken ? "yes" : "no (using access token)");
     
     let messagePayload: any;
     
-    if (buttons && buttons.length > 0) {
+    if (finalButtons && finalButtons.length > 0) {
       messagePayload = {
         attachment: {
           type: "template",
           payload: {
             template_type: "generic",
             elements: [{
-              title: message.substring(0, 80),
-              subtitle: message.length > 80 ? message.substring(80, 160) : undefined,
-              buttons: buttons.slice(0, 3).map(btn => ({
+              title: finalMessage.substring(0, 80),
+              subtitle: finalMessage.length > 80 ? finalMessage.substring(80, 160) : undefined,
+              buttons: finalButtons.slice(0, 3).map(btn => ({
                 type: "web_url",
                 url: btn.url,
                 title: btn.title.substring(0, 20)
@@ -224,15 +325,21 @@ export async function sendDirectMessage(accessToken: string, recipientId: string
         }
       };
     } else {
-      messagePayload = { text: message };
+      messagePayload = { text: finalMessage };
     }
     
-    const response = await axios.post(`${INSTAGRAM_GRAPH_URL}/me/messages`, {
-      recipient: { id: recipientId },
+    const endpoint = igBusinessAccountId 
+      ? `${FACEBOOK_GRAPH_URL}/${igBusinessAccountId}/messages`
+      : `${INSTAGRAM_GRAPH_URL}/me/messages`;
+    
+    console.log("Using endpoint:", endpoint);
+    
+    const response = await axios.post(endpoint, {
+      recipient: { id: finalRecipientId },
       message: messagePayload
     }, {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${tokenToUse}`,
         "Content-Type": "application/json"
       }
     });
@@ -243,17 +350,41 @@ export async function sendDirectMessage(accessToken: string, recipientId: string
     const errorData = error?.response?.data?.error;
     console.error("Error sending DM:", errorData || error?.message);
     console.error("Status:", error?.response?.status);
-    console.error("Recipient ID:", recipientId);
+    console.error("Recipient ID:", finalRecipientId);
+    console.error("Full error response:", JSON.stringify(error?.response?.data, null, 2));
     
-    if (buttons && buttons.length > 0) {
-      console.log("Retrying without buttons (text only)...");
+    if (igBusinessAccountId && !pageAccessToken) {
+      console.log("Retrying with Instagram Graph API endpoint...");
       try {
-        const textOnlyResponse = await axios.post(`${INSTAGRAM_GRAPH_URL}/me/messages`, {
-          recipient: { id: recipientId },
-          message: { text: message }
+        const fallbackResponse = await axios.post(`${INSTAGRAM_GRAPH_URL}/me/messages`, {
+          recipient: { id: finalRecipientId },
+          message: { text: finalMessage }
         }, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          }
+        });
+        console.log("Fallback DM sent successfully:", fallbackResponse.data);
+        return fallbackResponse.data;
+      } catch (fallbackError: any) {
+        console.error("Instagram Graph API fallback also failed:", fallbackError?.response?.data?.error || fallbackError?.message);
+      }
+    }
+    
+    if (finalButtons && finalButtons.length > 0) {
+      console.log("Retrying without buttons (text only)...");
+      try {
+        const textOnlyEndpoint = igBusinessAccountId 
+          ? `${FACEBOOK_GRAPH_URL}/${igBusinessAccountId}/messages`
+          : `${INSTAGRAM_GRAPH_URL}/me/messages`;
+          
+        const textOnlyResponse = await axios.post(textOnlyEndpoint, {
+          recipient: { id: finalRecipientId },
+          message: { text: finalMessage }
+        }, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
             "Content-Type": "application/json"
           }
         });
@@ -268,16 +399,38 @@ export async function sendDirectMessage(accessToken: string, recipientId: string
   }
 }
 
+export interface SendDMWithButtonsOptions {
+  accessToken: string;
+  recipientId: string;
+  message: string;
+  links?: DMLink[];
+  igBusinessAccountId?: string;
+  pageAccessToken?: string;
+}
+
 export async function sendDirectMessageWithButtons(
-  accessToken: string, 
-  recipientId: string, 
-  message: string, 
+  accessTokenOrOptions: string | SendDMWithButtonsOptions, 
+  recipientId?: string, 
+  message?: string, 
   links?: DMLink[]
 ) {
+  let options: SendDMWithButtonsOptions;
+  
+  if (typeof accessTokenOrOptions === 'string') {
+    options = {
+      accessToken: accessTokenOrOptions,
+      recipientId: recipientId!,
+      message: message!,
+      links
+    };
+  } else {
+    options = accessTokenOrOptions;
+  }
+  
   const buttons: DMButton[] = [];
   
-  if (links && links.length > 0) {
-    for (const link of links) {
+  if (options.links && options.links.length > 0) {
+    for (const link of options.links) {
       if (link.isButton) {
         buttons.push({
           type: "web_url",
@@ -289,12 +442,19 @@ export async function sendDirectMessageWithButtons(
   }
   
   if (buttons.length > 0) {
-    return sendDirectMessage(accessToken, recipientId, message, buttons);
+    return sendDirectMessage({
+      accessToken: options.accessToken,
+      recipientId: options.recipientId,
+      message: options.message,
+      buttons,
+      igBusinessAccountId: options.igBusinessAccountId,
+      pageAccessToken: options.pageAccessToken
+    });
   } else {
-    let fullMessage = message;
-    if (links && links.length > 0) {
+    let fullMessage = options.message;
+    if (options.links && options.links.length > 0) {
       fullMessage += "\n\n";
-      for (const link of links) {
+      for (const link of options.links) {
         if (link.label) {
           fullMessage += `${link.label}\n${link.url}\n\n`;
         } else {
@@ -302,7 +462,13 @@ export async function sendDirectMessageWithButtons(
         }
       }
     }
-    return sendDirectMessage(accessToken, recipientId, fullMessage.trim());
+    return sendDirectMessage({
+      accessToken: options.accessToken,
+      recipientId: options.recipientId,
+      message: fullMessage.trim(),
+      igBusinessAccountId: options.igBusinessAccountId,
+      pageAccessToken: options.pageAccessToken
+    });
   }
 }
 
