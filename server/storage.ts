@@ -1,5 +1,5 @@
 import { db } from "../drizzle";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, lte, sql } from "drizzle-orm";
 import {
   users,
   instagramAccounts,
@@ -7,6 +7,7 @@ import {
   generatedContent,
   activityLog,
   automationBackups,
+  automationQueue,
   type User,
   type InsertUser,
   type InstagramAccount,
@@ -19,6 +20,8 @@ import {
   type InsertActivityLog,
   type AutomationBackup,
   type InsertAutomationBackup,
+  type AutomationQueueItem,
+  type InsertAutomationQueueItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -65,6 +68,14 @@ export interface IStorage {
   deactivateInstagramAccount(id: string): Promise<void>;
   reactivateInstagramAccount(id: string, accessToken: string, expiresIn: number): Promise<void>;
   getDeactivatedInstagramAccount(userId: string, instagramUserId: string): Promise<InstagramAccount | undefined>;
+  
+  // Automation Queue
+  addToQueue(item: InsertAutomationQueueItem): Promise<AutomationQueueItem>;
+  getQueuedItems(limit?: number): Promise<AutomationQueueItem[]>;
+  markQueueItemProcessed(id: string): Promise<void>;
+  markQueueItemFailed(id: string, error: string): Promise<void>;
+  getQueueItemsByAutomationId(automationId: string): Promise<AutomationQueueItem[]>;
+  deleteQueueItemsByAutomationId(automationId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -292,6 +303,54 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return account;
+  }
+
+  // Automation Queue
+  async addToQueue(item: InsertAutomationQueueItem): Promise<AutomationQueueItem> {
+    const [queueItem] = await db.insert(automationQueue).values(item).returning();
+    return queueItem;
+  }
+
+  async getQueuedItems(limit: number = 50): Promise<AutomationQueueItem[]> {
+    return await db.select().from(automationQueue)
+      .where(
+        and(
+          eq(automationQueue.status, "pending"),
+          lte(automationQueue.scheduledFor, new Date())
+        )
+      )
+      .orderBy(automationQueue.scheduledFor)
+      .limit(limit);
+  }
+
+  async markQueueItemProcessed(id: string): Promise<void> {
+    await db.update(automationQueue)
+      .set({ 
+        status: "completed", 
+        processedAt: new Date(),
+        attempts: sql`${automationQueue.attempts} + 1`
+      })
+      .where(eq(automationQueue.id, id));
+  }
+
+  async markQueueItemFailed(id: string, error: string): Promise<void> {
+    await db.update(automationQueue)
+      .set({ 
+        status: "failed", 
+        error,
+        attempts: sql`${automationQueue.attempts} + 1`
+      })
+      .where(eq(automationQueue.id, id));
+  }
+
+  async getQueueItemsByAutomationId(automationId: string): Promise<AutomationQueueItem[]> {
+    return await db.select().from(automationQueue)
+      .where(eq(automationQueue.automationId, automationId))
+      .orderBy(desc(automationQueue.createdAt));
+  }
+
+  async deleteQueueItemsByAutomationId(automationId: string): Promise<void> {
+    await db.delete(automationQueue).where(eq(automationQueue.automationId, automationId));
   }
 }
 
