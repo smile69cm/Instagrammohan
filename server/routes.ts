@@ -47,11 +47,14 @@ function isWithinSchedule(config: any): boolean {
     const startTime = startH * 100 + (startM || 0);
     const endTime = endH * 100 + (endM || 0);
     
-    if (startTime < endTime) {
+    if (startTime <= endTime) {
+      // Normal daytime range (e.g., 9:00 to 17:00)
       if (currentTime < startTime || currentTime > endTime) {
         return false;
       }
     } else {
+      // Overnight range (e.g., 22:00 to 06:00)
+      // Current time must be >= start OR <= end
       if (currentTime < startTime && currentTime > endTime) {
         return false;
       }
@@ -702,20 +705,39 @@ export async function registerRoutes(
 
       const { instagramAccountId, recipientInstagramId, recipientUsername, message, links, scheduledFor, note } = req.body;
       
-      if (!instagramAccountId || !recipientInstagramId || !message || !scheduledFor) {
-        return res.status(400).json({ message: "Missing required fields" });
+      // Require either recipientInstagramId or recipientUsername
+      if (!instagramAccountId || (!recipientInstagramId && !recipientUsername) || !message || !scheduledFor) {
+        return res.status(400).json({ message: "Missing required fields. Provide either Instagram ID or username." });
       }
 
       const accounts = await storage.getInstagramAccountsByUserId(user.id);
-      if (!accounts.find(a => a.id === instagramAccountId)) {
+      const selectedAccount = accounts.find(a => a.id === instagramAccountId);
+      if (!selectedAccount) {
         return res.status(403).json({ message: "Instagram account not found or not yours" });
+      }
+
+      // If no recipientInstagramId provided, try to look up from follower tracking
+      let finalRecipientId = recipientInstagramId;
+      const cleanUsername = recipientUsername?.replace('@', '').toLowerCase();
+      
+      if (!finalRecipientId && cleanUsername) {
+        // Try to find the user's Instagram ID from follower tracking
+        const follower = await storage.getFollowerByUsername(selectedAccount.id, cleanUsername);
+        if (follower && follower.followerInstagramId) {
+          finalRecipientId = follower.followerInstagramId;
+          console.log(`Resolved username @${cleanUsername} to Instagram ID: ${finalRecipientId}`);
+        } else {
+          console.log(`Username @${cleanUsername} not found in followers - will store and try to resolve later`);
+          // Store without ID - will try to resolve when sending
+          finalRecipientId = `pending:${cleanUsername}`;
+        }
       }
 
       const scheduled = await storage.createScheduledMessage({
         userId: user.id,
         instagramAccountId,
-        recipientInstagramId,
-        recipientUsername,
+        recipientInstagramId: finalRecipientId,
+        recipientUsername: cleanUsername || recipientUsername,
         message,
         links,
         scheduledFor: new Date(scheduledFor),
@@ -880,6 +902,12 @@ export async function registerRoutes(
                 const keywords = config?.keywords || [];
                 const messageTemplate = config?.messageTemplate || "";
                 const targetMediaId = config?.mediaId;
+
+                // Check schedule - skip if outside active hours
+                if (!isWithinSchedule(config)) {
+                  console.log(`Automation "${automation.title}" skipped - outside scheduled hours`);
+                  continue;
+                }
 
                 // Check if this comment is on the target media (if specified)
                 if (targetMediaId && commentData.media?.id !== targetMediaId) {

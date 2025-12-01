@@ -158,10 +158,10 @@ export default function ScheduledMessages() {
       return;
     }
 
-    if (!formData.recipientInstagramId && !formData.recipientUsername) {
+    if (!formData.recipientUsername && !formData.recipientInstagramId) {
       toast({
         title: "Missing Recipient",
-        description: "Please enter a recipient Instagram ID or username",
+        description: "Please enter a recipient username",
         variant: "destructive",
       });
       return;
@@ -235,7 +235,7 @@ export default function ScheduledMessages() {
   };
 
   const getAccountName = (accountId: string) => {
-    const account = accounts.find((a: any) => a.instagramAccountId === accountId);
+    const account = accounts.find((a: any) => a.id === accountId);
     return account?.username || "Unknown Account";
   };
 
@@ -280,8 +280,8 @@ export default function ScheduledMessages() {
                       <SelectContent>
                         {accounts.map((account: any) => (
                           <SelectItem 
-                            key={account.instagramAccountId} 
-                            value={account.instagramAccountId}
+                            key={account.id} 
+                            value={account.id}
                           >
                             @{account.username}
                           </SelectItem>
@@ -291,21 +291,7 @@ export default function ScheduledMessages() {
                   </div>
 
                   <div className="grid gap-2">
-                    <Label htmlFor="recipientId">Recipient Instagram ID *</Label>
-                    <Input
-                      id="recipientId"
-                      placeholder="17841405793..."
-                      value={formData.recipientInstagramId}
-                      onChange={(e) => setFormData(prev => ({ ...prev, recipientInstagramId: e.target.value }))}
-                      data-testid="input-recipient-id"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      The Instagram scoped user ID of the recipient
-                    </p>
-                  </div>
-
-                  <div className="grid gap-2">
-                    <Label htmlFor="recipientUsername">Recipient Username (optional)</Label>
+                    <Label htmlFor="recipientUsername">Recipient Username *</Label>
                     <Input
                       id="recipientUsername"
                       placeholder="@username"
@@ -314,7 +300,21 @@ export default function ScheduledMessages() {
                       data-testid="input-recipient-username"
                     />
                     <p className="text-xs text-muted-foreground">
-                      For your reference only - used to display who the message is for
+                      Enter the Instagram username of the recipient (must have interacted with your account before)
+                    </p>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="recipientId">Recipient Instagram ID (optional)</Label>
+                    <Input
+                      id="recipientId"
+                      placeholder="17841405793..."
+                      value={formData.recipientInstagramId}
+                      onChange={(e) => setFormData(prev => ({ ...prev, recipientInstagramId: e.target.value }))}
+                      data-testid="input-recipient-id"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      If you have the Instagram scoped user ID, enter it here for direct sending
                     </p>
                   </div>
 

@@ -85,6 +85,7 @@ export interface IStorage {
   
   // Follower Tracking
   getFollowerTracking(instagramAccountId: string, followerInstagramId: string): Promise<FollowerTracking | undefined>;
+  getFollowerByUsername(instagramAccountId: string, username: string): Promise<FollowerTracking | undefined>;
   createFollowerTracking(tracking: InsertFollowerTracking): Promise<FollowerTracking>;
   updateFollowerTracking(id: string, updates: Partial<FollowerTracking>): Promise<void>;
   markWelcomeMessageSent(id: string): Promise<void>;
@@ -383,6 +384,19 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(followerTracking.instagramAccountId, instagramAccountId),
           eq(followerTracking.followerInstagramId, followerInstagramId)
+        )
+      )
+      .limit(1);
+    return tracking;
+  }
+
+  async getFollowerByUsername(instagramAccountId: string, username: string): Promise<FollowerTracking | undefined> {
+    const cleanUsername = username.toLowerCase().replace('@', '');
+    const [tracking] = await db.select().from(followerTracking)
+      .where(
+        and(
+          eq(followerTracking.instagramAccountId, instagramAccountId),
+          sql`LOWER(${followerTracking.followerUsername}) = ${cleanUsername}`
         )
       )
       .limit(1);
