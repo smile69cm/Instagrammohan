@@ -2,8 +2,8 @@ services:
   - type: web
     name: instagram-dm-automation
     runtime: node
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    buildCommand: yarn install && NODE_ENV=production yarn build
+    startCommand: yarn start
     envVars:
       - key: NODE_ENV
         value: production
@@ -20,4 +20,10 @@ services:
       - key: INSTAGRAM_WEBHOOK_VERIFY_TOKEN
         sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_HOST_URL
         sync: false
