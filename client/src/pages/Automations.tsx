@@ -338,17 +338,22 @@ export default function Automations() {
     setIsDialogOpen(true);
   };
 
+  const addKeyword = () => {
+    const keyword = keywordInput.trim().toLowerCase();
+    if (keyword && !formData.keywords.includes(keyword)) {
+      setFormData(prev => ({
+        ...prev,
+        keywords: [...prev.keywords, keyword]
+      }));
+    }
+    setKeywordInput("");
+  };
+
   const handleKeywordKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const keyword = keywordInput.trim().toLowerCase();
-      if (keyword && !formData.keywords.includes(keyword)) {
-        setFormData(prev => ({
-          ...prev,
-          keywords: [...prev.keywords, keyword]
-        }));
-      }
-      setKeywordInput("");
+      e.stopPropagation();
+      addKeyword();
     }
   };
 
@@ -686,14 +691,26 @@ export default function Automations() {
                       </Badge>
                     ))}
                   </div>
-                  <Input
-                    id="keywords"
-                    placeholder="Type a keyword and press Enter"
-                    value={keywordInput}
-                    onChange={(e) => setKeywordInput(e.target.value)}
-                    onKeyDown={handleKeywordKeyDown}
-                    data-testid="input-keywords"
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="keywords"
+                      placeholder="Type a keyword and press Enter"
+                      value={keywordInput}
+                      onChange={(e) => setKeywordInput(e.target.value)}
+                      onKeyDown={handleKeywordKeyDown}
+                      data-testid="input-keywords"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={addKeyword}
+                      disabled={!keywordInput.trim()}
+                      data-testid="button-add-keyword"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     When someone comments these words, they'll receive a DM
                   </p>
