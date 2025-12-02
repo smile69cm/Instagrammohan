@@ -338,31 +338,17 @@ export default function Automations() {
     setIsDialogOpen(true);
   };
 
-  const addKeywords = (input: string) => {
-    const newKeywords = input
-      .split(/[,\n]+/)
-      .map(k => k.trim().toLowerCase())
-      .filter(k => k && !formData.keywords.includes(k));
-    
-    if (newKeywords.length > 0) {
-      setFormData(prev => ({
-        ...prev,
-        keywords: [...prev.keywords, ...newKeywords]
-      }));
-    }
-    setKeywordInput("");
-  };
-
   const handleKeywordKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && keywordInput.trim()) {
+    if (e.key === "Enter") {
       e.preventDefault();
-      addKeywords(keywordInput);
-    }
-  };
-
-  const handleKeywordBlur = () => {
-    if (keywordInput.trim()) {
-      addKeywords(keywordInput);
+      const keyword = keywordInput.trim().toLowerCase();
+      if (keyword && !formData.keywords.includes(keyword)) {
+        setFormData(prev => ({
+          ...prev,
+          keywords: [...prev.keywords, keyword]
+        }));
+      }
+      setKeywordInput("");
     }
   };
 
@@ -702,11 +688,10 @@ export default function Automations() {
                   </div>
                   <Input
                     id="keywords"
-                    placeholder="Enter keywords separated by commas (e.g., link, info, price)"
+                    placeholder="Type a keyword and press Enter"
                     value={keywordInput}
                     onChange={(e) => setKeywordInput(e.target.value)}
                     onKeyDown={handleKeywordKeyDown}
-                    onBlur={handleKeywordBlur}
                     data-testid="input-keywords"
                   />
                   <p className="text-xs text-muted-foreground">
@@ -946,11 +931,10 @@ export default function Automations() {
                     </div>
                     <Input
                       id="triggerWords"
-                      placeholder="Enter keywords separated by commas (e.g., info, help, price)"
+                      placeholder="Type a keyword and press Enter"
                       value={keywordInput}
                       onChange={(e) => setKeywordInput(e.target.value)}
                       onKeyDown={handleKeywordKeyDown}
-                      onBlur={handleKeywordBlur}
                       data-testid="input-trigger-words"
                     />
                     <p className="text-xs text-muted-foreground">When someone DMs these keywords, they'll receive your reply. Leave empty to respond to all messages.</p>
