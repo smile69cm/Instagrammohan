@@ -21,6 +21,32 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// Health check endpoints - MUST be before any other middleware
+// Handle both GET and HEAD requests for UptimeRobot monitoring
+app.route("/api/health")
+  .get((_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  })
+  .head((_req, res) => {
+    res.status(200).end();
+  });
+
+app.route("/health")
+  .get((_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  })
+  .head((_req, res) => {
+    res.status(200).end();
+  });
+
+app.all("/ping", (req, res) => {
+  if (req.method === "HEAD") {
+    res.status(200).end();
+  } else {
+    res.send("pong");
+  }
+});
+
 // Logging middleware
 app.use((req, res, next) => {
   const start = Date.now();
