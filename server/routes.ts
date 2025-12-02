@@ -103,13 +103,36 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   
-  // Apply Clerk middleware globally
-  app.use(clerk);
+  // Health check endpoints - MUST be before Clerk middleware to avoid auth issues
+  // These handle both GET and HEAD requests for UptimeRobot and similar monitoring services
+  app.route("/api/health")
+    .get((_req, res) => {
+      res.json({ status: "ok", timestamp: new Date().toISOString() });
+    })
+    .head((_req, res) => {
+      res.status(200).end();
+    });
 
-  // Health check
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok" });
+  // Root-level health endpoint for UptimeRobot monitoring
+  app.route("/health")
+    .get((_req, res) => {
+      res.json({ status: "ok", timestamp: new Date().toISOString() });
+    })
+    .head((_req, res) => {
+      res.status(200).end();
+    });
+
+  // Simple ping endpoint
+  app.all("/ping", (_req, res) => {
+    if (_req.method === "HEAD") {
+      res.status(200).end();
+    } else {
+      res.send("pong");
+    }
   });
+
+  // Apply Clerk middleware globally (after health endpoints)
+  app.use(clerk);
 
   // ========================================
   // USER ROUTES
