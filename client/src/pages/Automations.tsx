@@ -1,4 +1,4 @@
-import { useState, useEffect, KeyboardEvent } from "react";
+import { useState, useEffect, KeyboardEvent, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   MessageSquare, 
@@ -105,6 +105,8 @@ export default function Automations() {
   const [loadingMedia, setLoadingMedia] = useState(false);
   const [keywordInput, setKeywordInput] = useState("");
   const [linkInput, setLinkInput] = useState({ label: "", url: "" });
+  const keywordInputRef = useRef<HTMLInputElement>(null);
+  const linkUrlInputRef = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = useState({
     type: "comment_to_dm",
     title: "",
@@ -347,6 +349,10 @@ export default function Automations() {
       }));
     }
     setKeywordInput("");
+    // Keep focus on the input to prevent keyboard from closing on mobile
+    requestAnimationFrame(() => {
+      keywordInputRef.current?.focus();
+    });
   };
 
   const handleKeywordKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -371,6 +377,10 @@ export default function Automations() {
         links: [...prev.links, { label: linkInput.label.trim() || undefined, url: linkInput.url.trim() }]
       }));
       setLinkInput({ label: "", url: "" });
+      // Keep focus on the URL input to prevent keyboard from closing on mobile
+      requestAnimationFrame(() => {
+        linkUrlInputRef.current?.focus();
+      });
     }
   };
 
@@ -693,6 +703,7 @@ export default function Automations() {
                   </div>
                   <div className="flex gap-2">
                     <Input
+                      ref={keywordInputRef}
                       id="keywords"
                       placeholder="Type a keyword and press Enter"
                       value={keywordInput}
@@ -700,13 +711,17 @@ export default function Automations() {
                       onKeyDown={handleKeywordKeyDown}
                       data-testid="input-keywords"
                       className="flex-1"
+                      autoComplete="off"
                     />
                     <Button
                       type="button"
                       variant="outline"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onTouchStart={(e) => e.preventDefault()}
                       onClick={addKeyword}
                       disabled={!keywordInput.trim()}
                       data-testid="button-add-keyword"
+                      className="touch-manipulation"
                     >
                       <Plus className="h-4 w-4" />
                     </Button>
@@ -770,21 +785,27 @@ export default function Automations() {
                       onChange={(e) => setLinkInput(prev => ({ ...prev, label: e.target.value }))}
                       className="flex-1"
                       data-testid="input-link-label"
+                      autoComplete="off"
                     />
                     <Input
+                      ref={linkUrlInputRef}
                       placeholder="https://..."
                       value={linkInput.url}
                       onChange={(e) => setLinkInput(prev => ({ ...prev, url: e.target.value }))}
                       className="flex-1"
                       data-testid="input-link-url"
+                      autoComplete="off"
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onTouchStart={(e) => e.preventDefault()}
                       onClick={addLink}
                       disabled={!linkInput.url.trim()}
                       data-testid="button-add-link"
+                      className="touch-manipulation"
                     >
                       <Plus className="h-4 w-4" />
                     </Button>
@@ -947,12 +968,14 @@ export default function Automations() {
                       ))}
                     </div>
                     <Input
+                      ref={keywordInputRef}
                       id="triggerWords"
                       placeholder="Type a keyword and press Enter"
                       value={keywordInput}
                       onChange={(e) => setKeywordInput(e.target.value)}
                       onKeyDown={handleKeywordKeyDown}
                       data-testid="input-trigger-words"
+                      autoComplete="off"
                     />
                     <p className="text-xs text-muted-foreground">When someone DMs these keywords, they'll receive your reply. Leave empty to respond to all messages.</p>
                   </div>
@@ -1047,21 +1070,27 @@ export default function Automations() {
                       onChange={(e) => setLinkInput(prev => ({ ...prev, label: e.target.value }))}
                       className="flex-1"
                       data-testid="input-dm-link-label"
+                      autoComplete="off"
                     />
                     <Input
+                      ref={linkUrlInputRef}
                       placeholder="https://..."
                       value={linkInput.url}
                       onChange={(e) => setLinkInput(prev => ({ ...prev, url: e.target.value }))}
                       className="flex-1"
                       data-testid="input-dm-link-url"
+                      autoComplete="off"
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onTouchStart={(e) => e.preventDefault()}
                       onClick={addLink}
                       disabled={!linkInput.url.trim()}
                       data-testid="button-add-dm-link"
+                      className="touch-manipulation"
                     >
                       <Plus className="h-4 w-4" />
                     </Button>
